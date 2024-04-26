@@ -1,0 +1,24 @@
+# ninja log v5
+1	16899	1710921709306110948	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index.o	a53aedf0fe24409b
+1	30358	1710921722774626494	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	30710	1710922543507051096	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+5	29605	1710922980844865688	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+5	29795	1710923310966925397	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+5	16521	1710923424965281204	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index.o	a53aedf0fe24409b
+6	29246	1710923886891267510	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	29226	1710924281114169635	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+8	29426	1710925650515274727	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	17385	1710926088503107414	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index.o	a53aedf0fe24409b
+7	31715	1710926102847217717	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+8	30245	1710926897560631499	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+5	29166	1710927068781700684	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+8	16882	1710933272390955029	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index.o	a53aedf0fe24409b
+8	30723	1710933286243018806	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	30553	1710933359379355621	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+7	29915	1710933618655091806	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	30233	1710933735004541730	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+5	30472	1710934157206606829	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+7	30870	1710935281822738379	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	35705	1710940817838902140	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+7	33468	1710941059131290363	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8
+6	29858	1711011256260344776	/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/build/temp.linux-x86_64-cpython-38/gather_index_kernel.o	96ce329a72cb9df8

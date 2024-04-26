@@ -1,0 +1,1 @@
+-isystem "/usr/local/cuda-12.2/include" -isystem "/home/morgen/.conda/envs/3dsam/lib/python3.8/site-packages/torch/include" -isystem "/home/morgen/.conda/envs/3dsam/lib/python3.8/site-packages/torch/include/torch/csrc/api/include"
