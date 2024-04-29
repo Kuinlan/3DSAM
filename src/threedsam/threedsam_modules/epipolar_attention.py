@@ -137,6 +137,8 @@ class CrossAttention(nn.Module):
                 R, t, K1, K0, self.area_width)
         else:
             raise KeyError
+
+        query = query.view(N, -1, self.dim, self.nhead)  # [N, L, H, D]
         key =  key[torch.arange(N, device=device)[..., None][..., None], 
                    index, :].view(N, -1, C, self.dim, self.nhead)  # [N, L, C, H, D]
         value = value[torch.arange(N, device=device)[..., None][..., None], 

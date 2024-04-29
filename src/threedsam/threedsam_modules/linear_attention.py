@@ -8,7 +8,7 @@ from torch.nn import Module, Dropout
 
 
 def elu_feature_map(x):
-    return torch.nn.functional.elu(x) + 1
+    return torch.nn.functional.elu(x, inplace=True) + 1
 
 
 class FullAttention(Module):
