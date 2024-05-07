@@ -66,7 +66,7 @@ class StructureExtractor(nn.Module):
             augmented_feat0 (torch.Tensor): [N, L, C]
             augmented_feat1 (torch.Tensor): [N, S, C]
         """
-        N, L = feat0.shape
+        N, L, _ = feat0.shape
         epipolar_info = dict(h0c = data['hw0_c_16'][0],
                              w0c = data['hw0_c_16'][1],
                              h1c = data['hw1_c_16'][0],
@@ -74,26 +74,25 @@ class StructureExtractor(nn.Module):
                              scale = data['hw0_i'][0] / data['hw0_c_16'][0],
                              K0 = data['K0'], 
                              K1 = data['K1'])
-        scale = data['wh0_i'] / data['hw0_c_8']
+        scale = data['hw0_i'][0] // data['hw0_c'][0]  # 8
         pts_3d0 = data['pts_3d0'] # [N, L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1']
         mask = data['match_mask']
         
         # 1.get anchor index 
-        generator = torch.manual_seed(self.sample_seed)
         mask_v, all_j_ids = mask.max(dim=2)
         b_ids, i_ids = torch.where(mask_v)
         j_ids = all_j_ids[b_ids, i_ids]
-        anchor_num = mask.sum(dim=(1, 2))  # [N, ]
+        anchor_num = mask.sum(dim=(1, 2)).to(torch.int32)  # [N, ]
 
         # 2.anchor index padding 
-        anchor_i_ids, anchor_j_ids =  anchor_index_padding(data, anchor_num, (i_ids, j_ids),
+        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, anchor_num, (i_ids, j_ids),
                                                             self.train_anchor_num, self.pad_num_min,
-                                                            generator, self.training)  # [N, ANCHOR_NUM]
+                                                            self.training)  # [N, ANCHOR_NUM]
         pts_2d0 = torch.stack([anchor_i_ids % data['hw0_c'][1], 
-                                anchor_i_ids // data['hw0_c'][1]], dim=-1)  # [N, ANCHOR_NUM, 2]
+                                anchor_i_ids // data['hw0_c'][1]], dim=-1).to(torch.float32)  # [N, ANCHOR_NUM, 2]
         pts_2d1 = torch.stack([anchor_j_ids % data['hw1_c'][1], 
-                                anchor_j_ids // data['hw1_c'][1]], dim=-1)
+                                anchor_j_ids // data['hw1_c'][1]], dim=-1).to(torch.float32)
         
         # 3.estimate relative pose using anchor points
         R, t = estimate_pose(pts_2d0, pts_2d1)
@@ -103,11 +102,13 @@ class StructureExtractor(nn.Module):
         data.update(epipolar_info = epipolar_info)
 
         # 4. compute 3D relative position to anchor points
-        anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids*scale, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
-        anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids*scale, :]
+        anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
+        anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
 
-        structured_feat0 = pts_3d0.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
-        structured_feat1 = pts_3d1.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
+        pts_3d0_c = pts_3d0.view(1, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
+        pts_3d1_c = pts_3d1.view(1, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
+        structured_feat0 = pts_3d0_c.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
+        structured_feat1 = pts_3d1_c.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
 
         dist0 = structured_feat0.square().sum(dim=-1, keepdim=True)  # [N, L, ANCHOR_NUM, 1]
         dist1 = structured_feat1.square().sum(dim=-1, keepdim=True)  

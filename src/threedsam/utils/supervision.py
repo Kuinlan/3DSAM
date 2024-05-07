@@ -39,7 +39,7 @@ def spvs_coarse(data, config):
     device = data['image0'].device
     N, _, H0, W0 = data['image0'].shape
     _, _, H1, W1 = data['image1'].shape
-    scale = config['LOFTR']['RESOLUTION'][0]
+    scale = config['THREEDSAM']['RESOLUTION'][2]
     scale0 = scale * data['scale0'][:, None] if 'scale0' in data else scale
     scale1 = scale * data['scale1'][:, None] if 'scale1' in data else scale
     h0, w0, h1, w1 = map(lambda x: x // scale, [H0, W0, H1, W1])
@@ -92,13 +92,14 @@ def spvs_coarse(data, config):
     data.update({'conf_matrix_gt': conf_matrix_gt})
     
     # prepare gt matches for anchor points padding
-    generator = torch.manual_seed(seed)
-    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2))
+    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)
     cumsum_match_gt = num_match_gt.cumsum(dim=0)
 
     skip_sample = num_match_gt < anchor_num
     if skip_sample.sum(dim=0) > 0:
         non_skip_ids = torch.where(~skip_sample)[0]
+    else:
+        non_skip_ids = torch.arange(0, N, 1)
 
     anchor_ids_gt = []
     for idx in non_skip_ids:
@@ -106,13 +107,13 @@ def spvs_coarse(data, config):
         high = cumsum_match_gt[idx]
         # no replacement
         anchor_index_fixed = (
-            torch.randperm(num_match_gt[idx], generator=generator, device=device) + low,
+            torch.randperm(num_match_gt[idx], device=device) + low
         )[:train_pad_anchor_num_min]
         # with replacement
         anchor_index_non_fixed = (
             torch.randint(
                 low, high, (anchor_num - train_pad_anchor_num_min, ),
-                generator=generator, dtype=torch.int64, device=device
+                dtype=torch.int64, device=device
             )
         )
         anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0) 
