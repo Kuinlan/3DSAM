@@ -92,7 +92,6 @@ def spvs_coarse(data, config):
     data.update({'conf_matrix_gt': conf_matrix_gt})
     
     # prepare gt matches for anchor points padding
-    generator = torch.manual_seed(seed)
     num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2))
     cumsum_match_gt = num_match_gt.cumsum(dim=0)
     pad_anchor_idx = []
@@ -102,13 +101,13 @@ def spvs_coarse(data, config):
             high = cumsum_match_gt[idx]
             # no replacement
             anchor_index_fixed = (
-                torch.randperm(num_match_gt[idx], generator=generator, device=device) + low,
+                torch.randperm(num_match_gt[idx], device=device) + low,
             )[:train_pad_num_anchor_min]
             # with replacement
             anchor_index_non_fixed = (
                 torch.randint(
                     low, high, (anchor_num - train_pad_num_anchor_min, ),
-                    generator=generator, dtype=torch.int64, device=device
+                     dtype=torch.int64, device=device
                 )
             )
             anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0) 

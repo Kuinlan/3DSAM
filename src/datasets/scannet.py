@@ -173,6 +173,8 @@ class ScanNetDataset(utils.data.Dataset):
         pts_3d0 = get_point_cloud(prediction0, K_0)    # (h * w, 3)
         pts_3d1 = get_point_cloud(prediction1, K_1)
 
+
+
         data = {
             'image0': image0,   # (1, h, w)
             'depth0': depth0,   # (h, w)

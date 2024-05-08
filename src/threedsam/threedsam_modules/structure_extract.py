@@ -7,10 +7,16 @@ INF = 1e9
 
 @torch.no_grad()
 def estimate_pose(kpts0, kpts1):
+    device = kpts0.device
+    N = kpts0.shape[0]
     E_mat = find_essential(kpts0, kpts1)
-    R_est, _, t_est = decompose_essential_matrix(E_mat)
+    if E_mat.allclose(torch.eye(3, dtype=torch.float32, device=device).unsqueeze(dim=0), rtol=1e-2):
+        R = torch.eye(3, dtype=torch.float32, device=device).unsqueeze(dim=0)
+        t = torch.zeros((3, 1), dtype=torch.float32, device=device).unsqueeze(dim=0)
+    else:
+        R, _, t = decompose_essential_matrix(E_mat)
 
-    return R_est, t_est 
+    return R, t 
 
 
 @torch.no_grad()
@@ -34,18 +40,14 @@ class StructureExtractor(nn.Module):
         self.border_rm = config['border_rm']    # 2
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
-        self.dropout_prob = config['dropout_prob']    # 0.8
+        self.dropout_prob = config['dropout_prob']    # 0.2
         self.sample_seed = config['anchor_sampler_seed']
 
         # feed-forward network
         self.mlp = nn.Sequential(
-            nn.Linear(self.dim_color + self.dim_struct, 128),
+            nn.Linear(self.dim_color+self.dim_struct, self.dim_color+self.dim_struct),
             nn.ReLU(True),
-            nn.Dropout(p = self.dropout_prob),
-            nn.Linear(128, 256), 
-            nn.ReLU(True),
-            nn.Dropout(p = self.dropout_prob),
-            nn.Linear(256, self.dim_color)
+            nn.Linear(self.dim_color+self.dim_struct, self.dim_color), 
         )
 
     def forward(self, feat0, feat1, data):
@@ -95,7 +97,15 @@ class StructureExtractor(nn.Module):
                                 anchor_j_ids // data['hw1_c'][1]], dim=-1).to(torch.float32)
         
         # 3.estimate relative pose using anchor points
-        R, t = estimate_pose(pts_2d0, pts_2d1)
+        Rs = []
+        ts = []
+        for b in range(N):
+            R, t = estimate_pose(pts_2d0[[b], ...], pts_2d1[[b], ...] )
+            Rs.append(R)
+            ts.append(t)
+
+        R = torch.cat(Rs, dim=0)
+        t = torch.cat(ts, dim=0)
         epipolar_info['R'] = R
         epipolar_info['t'] = t
 
@@ -116,7 +126,7 @@ class StructureExtractor(nn.Module):
         structured_feat0 = l1_norm(torch.cat([structured_feat0, dist0], dim=-1), dim=-2) # [N, L, ANCHOR_NUM, 4]
         structured_feat1 = l1_norm(torch.cat([structured_feat1, dist1], dim=-1), dim=-2) 
         
-        structured_feat0 = structured_feat0.transpose(-1, -2).contiguous().view(N, L, -1) 
+        structured_feat0 = structured_feat0.transpose(-1, -2).contiguous().view(N, L, -1)  # [N, L, 4 * ANCHOR_NUM]
         structured_feat1 = structured_feat1.transpose(-1, -2).contiguous().view(N, L, -1)
 
         # 5. feature augmentation
