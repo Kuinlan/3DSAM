@@ -9,9 +9,9 @@ import numpy as np
 import pytorch_lightning as pl
 from matplotlib import pyplot as plt
 
-from src.loftr import LoFTR
-from src.loftr.utils.supervision import compute_supervision_coarse, compute_supervision_fine
-from src.losses.loftr_loss import LoFTRLoss
+from src.threedsam import ThreeDSAM
+from src.threedsam.utils.supervision import compute_supervision_coarse, compute_supervision_fine
+from src.losses.threedsam_loss import ThreeDSAMLoss
 from src.optimizers import build_optimizer, build_scheduler
 from src.utils.metrics import (
     compute_symmetrical_epipolar_errors,
@@ -24,7 +24,7 @@ from src.utils.misc import lower_config, flattenList
 from src.utils.profiler import PassThroughProfiler
 
 
-class PL_LoFTR(pl.LightningModule):
+class PL_3DSAM(pl.LightningModule):
     def __init__(self, config, pretrained_ckpt=None, profiler=None, dump_dir=None):
         """
         TODO:
@@ -34,13 +34,13 @@ class PL_LoFTR(pl.LightningModule):
         # Misc
         self.config = config  # full config
         _config = lower_config(self.config)
-        self.loftr_cfg = lower_config(_config['loftr'])
+        self.threedsam_cfg = lower_config(_config['threedsam'])
         self.profiler = profiler or PassThroughProfiler()
         self.n_vals_plot = max(config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1)
 
-        # Matcher: LoFTR
-        self.matcher = LoFTR(config=_config['loftr'])
-        self.loss = LoFTRLoss(_config)
+        # Matcher: ThreeDSAM
+        self.matcher = ThreeDSAM(config=_config['threedsam'])
+        self.loss = ThreeDSAMLoss(_config)
 
         # Pretrained weights
         if pretrained_ckpt:
@@ -83,7 +83,7 @@ class PL_LoFTR(pl.LightningModule):
         with self.profiler.profile("Compute coarse supervision"):
             compute_supervision_coarse(batch, self.config)
         
-        with self.profiler.profile("LoFTR"):
+        with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)
         
         with self.profiler.profile("Compute fine supervision"):
@@ -119,7 +119,7 @@ class PL_LoFTR(pl.LightningModule):
                 self.logger.experiment.add_scalar(f'train/{k}', v, self.global_step)
 
             # net-params
-            if self.config.LOFTR.MATCH_COARSE.MATCH_TYPE == 'sinkhorn':
+            if self.config.THREEDSAM.MATCH_COARSE.MATCH_TYPE == 'sinkhorn':
                 self.logger.experiment.add_scalar(
                     f'skh_bin_score', self.matcher.coarse_matching.bin_score.clone().detach().cpu().data, self.global_step)
 
@@ -203,7 +203,7 @@ class PL_LoFTR(pl.LightningModule):
             self.log(f'auc@{thr}', torch.tensor(np.mean(multi_val_metrics[f'auc@{thr}'])))  # ckpt monitors on this
 
     def test_step(self, batch, batch_idx):
-        with self.profiler.profile("LoFTR"):
+        with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)
 
         ret_dict, rel_pair_names = self._compute_metrics(batch)
@@ -246,4 +246,4 @@ class PL_LoFTR(pl.LightningModule):
             val_metrics_4tb = aggregate_metrics(metrics, self.config.TRAINER.EPI_ERR_THR)
             logger.info('\n' + pprint.pformat(val_metrics_4tb))
             if self.dump_dir is not None:
-                np.save(Path(self.dump_dir) / 'LoFTR_pred_eval', dumps)
+                np.save(Path(self.dump_dir) / 'ThreeDSAM_pred_eval', dumps)
