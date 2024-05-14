@@ -167,15 +167,16 @@ class CrossAttention(nn.Module):
         coord  = self.coord  # [N, L, 2]
 
         lines, mode = get_epipolar_line_std(coord, R, t, K0, K1)  # [N, L, 2], [N, L]       
-        mask_within_area = get_mask(coord, lines, mode, area_width) 
-        index, mask = self.gather_index(mask_within_area) 
+        mask_within_area = get_mask(coord, lines, mode, area_width) # [N, L, S] 
+        # output = gather_index(mask_within_area, self.max_candidate_num) 
+        index, mask = self.gather_index(mask_within_area)
 
         return index, mask
-
+    
     @torch.no_grad()
     def gather_index(self, x):
-        N, L, _ = x.shape
         C = self.max_candidate_num
+        N, L, _ = x.shape
         indices = torch.arange(L, device=x.device, dtype=torch.int64)[None][None].repeat(N, L, 1)  # [N, L, L]
         true_indices = torch.where(x, indices, torch.tensor(0, device=x.device, dtype=torch.int64))  # [N, L, L]
         true_indices, _ = torch.sort(true_indices, dim=-1)
@@ -183,6 +184,7 @@ class CrossAttention(nn.Module):
         mask = indices_output != 0  # [N, L, C]
 
         return indices, mask
+
         
 @torch.no_grad()
 def get_scaled_K(K: torch.Tensor, scale):
