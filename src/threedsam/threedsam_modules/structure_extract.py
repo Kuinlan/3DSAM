@@ -1,9 +1,13 @@
 import torch
 import torch.nn as nn
-from ..utils.index_padding import anchor_index_padding
+
 from kornia.geometry.epipolar import find_essential, decompose_essential_matrix
+from kornia.utils import create_meshgrid
+
+from ..utils.index_padding import anchor_index_padding
 
 INF = 1e9
+
 
 @torch.no_grad()
 def estimate_pose(kpts0, kpts1):
@@ -40,8 +44,6 @@ class StructureExtractor(nn.Module):
         self.border_rm = config['border_rm']    # 2
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
-        self.dropout_prob = config['dropout_prob']    # 0.2
-        self.sample_seed = config['anchor_sampler_seed']
 
         # feed-forward network
         self.mlp = nn.Sequential(
@@ -76,7 +78,7 @@ class StructureExtractor(nn.Module):
                              scale = data['hw0_i'][0] / data['hw0_c_16'][0],
                              K0 = data['K0'], 
                              K1 = data['K1'])
-        scale = data['hw0_i'][0] // data['hw0_c'][0]  # 8
+        scale = data['hw0_i'][0] // data['hw0_c_8'][0]  # 8
         pts_3d0 = data['pts_3d0'] # [N, L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1']
         mask = data['match_mask']
@@ -91,10 +93,10 @@ class StructureExtractor(nn.Module):
         anchor_i_ids, anchor_j_ids = anchor_index_padding(data, anchor_num, (i_ids, j_ids),
                                                             self.train_anchor_num, self.pad_num_min,
                                                             self.training)  # [N, ANCHOR_NUM]
-        pts_2d0 = torch.stack([anchor_i_ids % data['hw0_c'][1], 
-                                anchor_i_ids // data['hw0_c'][1]], dim=-1).to(torch.float32)  # [N, ANCHOR_NUM, 2]
-        pts_2d1 = torch.stack([anchor_j_ids % data['hw1_c'][1], 
-                                anchor_j_ids // data['hw1_c'][1]], dim=-1).to(torch.float32)
+        pts_2d0 = torch.stack([anchor_i_ids % data['hw0_c_8'][1], 
+                                anchor_i_ids // data['hw0_c_8'][1]], dim=-1).to(torch.float32)  # [N, ANCHOR_NUM, 2]
+        pts_2d1 = torch.stack([anchor_j_ids % data['hw1_c_8'][1], 
+                                anchor_j_ids // data['hw1_c_8'][1]], dim=-1).to(torch.float32)
         
         # 3.estimate relative pose using anchor points
         Rs = []
@@ -115,8 +117,14 @@ class StructureExtractor(nn.Module):
         anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
         anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
 
-        pts_3d0_c = pts_3d0.view(1, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
-        pts_3d1_c = pts_3d1.view(1, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
+        grid_c = create_meshgrid(data['hw0_c_8'][0], data['hw0_c_8'][1], False, pts_3d0.device, torch.int64)
+        grid_c = (grid_c * scale).reshape(-1, 2)  # [L, 2] 
+        inds_c = data['hw0_c_8'][1] * grid_c[:, 1] + grid_c[:, 0]  # [N, ]
+        pts_3d0_c = pts_3d0[:, inds_c, :]  # [N, L, 3]
+        pts_3d1_c = pts_3d1[:, inds_c, :]
+        # pts_3d0_c = pts_3d0.view(N, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
+        # pts_3d1_c = pts_3d1.view(N, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
+        
         structured_feat0 = pts_3d0_c.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
         structured_feat1 = pts_3d1_c.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
 

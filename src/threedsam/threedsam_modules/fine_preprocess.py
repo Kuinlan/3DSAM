@@ -28,7 +28,7 @@ class FinePreprocess(nn.Module):
 
     def forward(self, feat_f0, feat_f1, feat_c0, feat_c1, data):
         W = self.W
-        stride = data['hw0_f'][0] // data['hw0_c'][0]
+        stride = data['hw0_f'][0] // data['hw0_c_8'][0]
 
         data.update({'W': W})
         if data['b_ids'].shape[0] == 0:

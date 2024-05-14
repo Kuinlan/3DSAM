@@ -6,27 +6,28 @@ from kornia.utils import create_meshgrid
 def get_point_cloud(depth, K, scale = 1):
     """
     Args:
-        depth (torch.Tensor): [h, w]
-        K (torch.Tensor): [3, 3]
+        depth (torch.Tensor): [N, h, w]
+        K (torch.Tensor): [N, 3, 3]
 
     Returns:
-        pts_3d: (torch.Tensor): [L, 3]
+        pts_3d: (torch.Tensor): [N, L, 3]
     """
 
     _device = depth.device
-    K = K.to(_device)
-    h0 = depth.shape[0] // scale 
-    w0 = depth.shape[1] // scale
-    grid_pt = create_meshgrid(h0, w0, False, device = _device).reshape(1, h0*w0, 2).squeeze(dim=0)  # (h0 * w0, 2)
+    N = depth.shape[0]
+    h0 = depth.shape[1] // scale 
+    w0 = depth.shape[2] // scale
+    grid_pt = create_meshgrid(h0, w0, False, device = _device).reshape(1, h0*w0, 2).repeat(N, 1, 1)  # (N, h * w, 2)
     grid_pt *= scale
     grid_pt_long = grid_pt.round().long()
 
     # Get depth for all points
-    kpts_depth = depth[grid_pt_long[:, 1], grid_pt_long[:, 0]] # (h0 * w0)
+    kpts_depth = depth[:, grid_pt_long[:, :, 1], grid_pt_long[:, :, 0]] # (N, h, w) -> (N, h * w)
      
     # Unproject
-    grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, [0]])], dim=-1) * kpts_depth[..., None]  # (L, 3)
-    pts_3d = grid_pt_h @ K.inverse().transpose(1, 0)  # (L, 3)  
+    grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, :, [0]])], dim=-1) * kpts_depth[..., None]  # (N, h * w, 3)
+    # (K.inv() @ P.T).T = P @ k.inv().T
+    pts_3d = grid_pt_h @ K.inverse().transpose(1, 2)  # (N, L, 3)
     
     return pts_3d
 

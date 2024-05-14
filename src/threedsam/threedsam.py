@@ -101,6 +101,7 @@ class ThreeDSAM(nn.Module):
         feat0_32 = rearrange(self.pos_encoding_32(feat0_32), 'n c h w -> n (h w) c')
         feat1_32 = rearrange(self.pos_encoding_32(feat1_32), 'n c h w -> n (h w) c')
 
+        mask_c0, mask_c1 = None, None
         if 'mask0' in data:
             mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
         feat0_8, feat1_8 = self.init_attention(feat0_8, feat1_8, mask_c0, mask_c1)
@@ -130,7 +131,7 @@ class ThreeDSAM(nn.Module):
         skip_sample = None
         if self.training and data['skip_sample'].sum(0) > 0:  # if no sample need to skip, use all the samples to train 
             skip_sample = data['skip_sample']
-            if skip_sample.sum(0) == N:  # no valid sample, whole batch needs to skip
+            if skip_sample.sum(0) == N:  # no valid sample, the whole batch needs to skip
                 self.skip = True 
             else:  # split the batch into skip ones and non_skip ones
                 feat0_8_skip, feat1_8_skip = feat0_8[skip_sample], feat1_8[skip_sample] 
@@ -139,11 +140,11 @@ class ThreeDSAM(nn.Module):
                 feat0_32, feat1_32 = feat0_32[~skip_sample], feat1_32[~skip_sample]
                 feat0_16, feat1_16 = feat0_16[~skip_sample], feat1_16[~skip_sample]
                 feat0_8, feat1_8 = feat0_8[~skip_sample], feat1_8[~skip_sample]
-
+                data['conf_matrix'] = data['conf_matrix'][~skip_sample]
 
         # 3. iterative optimization
         for n in range(self.iter_num):
-            match_mask = get_match_mask(data, self.thr, self.border_rm)
+            match_mask = get_match_mask(data, self.thr, self.border_rm)  # (N', L, L)
             
             # for eval/test mode
             if not self.training:
@@ -160,7 +161,7 @@ class ThreeDSAM(nn.Module):
             feats_8, feats_16, feats_32 = IterativeOptimization((feat0_8, feat1_8),
                                                                 (feat0_16, feat1_16),
                                                                 (feat0_32, feat1_32), data)
-            # feature update for next iteration
+            # features for next iteration
             feat0_8, feat1_8 = feats_8
             feat0_16, feat1_16 = feats_16
             feat0_32, feat1_32 = feats_32
@@ -169,10 +170,11 @@ class ThreeDSAM(nn.Module):
 
         # 4. coarse matching 
         if skip_sample is not None and self.skip == False:  # combine two parts splited 
+            C = feat0_8.shape[-1]
             _, L, S = data['conf_matrix'].shape 
 
-            feat0_8_all = torch.empty((N, L))
-            feat1_8_all = torch.empty((N, S))
+            feat0_8_all = torch.empty((N, L, C))
+            feat1_8_all = torch.empty((N, S, C))
             feat0_8_all[skip_sample], feat1_8_all[skip_sample] = feat0_8_skip, feat1_8_skip
             feat0_8_all[~skip_sample], feat1_8_all[~skip_sample] = feat0_8, feat1_8
             

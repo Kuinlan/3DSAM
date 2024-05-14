@@ -156,6 +156,29 @@ def read_scannet_gray(path, resize=(640, 480), augment_fn=None):
     image = torch.from_numpy(image).float()[None] / 255
     return image
 
+def read_scannet(path, resize=(640, 480), augment_fn=None):
+    """
+    Args:
+        resize (tuple): align image to depthmap, in (w, h).
+        augment_fn (callable, optional): augments images with pre-defined visual effects
+    Returns:
+        image (torch.tensor): (1, h, w)
+        mask (torch.tensor): (h, w)
+        scale (torch.tensor): [w/w_new, h/h_new]        
+    """
+    # read and resize image
+    image_grey = imread_gray(path, augment_fn)
+    image_color = cv2.imread(path, cv2.IMREAD_COLOR)
+    image_color = cv2.cvtColor(image_color, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
+
+    image_grey = cv2.resize(image_grey, resize)
+    image_color = cv2.resize(image_color, resize)
+
+    # (h, w) -> (1, h, w) and normalized
+    image_grey = torch.from_numpy(image_grey).float()[None] / 255
+    
+    return image_grey, image_color
+
 
 def read_scannet_depth(path):
     if str(path).startswith('s3://'):

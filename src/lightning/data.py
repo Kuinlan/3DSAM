@@ -57,8 +57,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.test_npz_root = config.DATASET.TEST_NPZ_ROOT
         self.test_list_path = config.DATASET.TEST_LIST_PATH
         self.test_intrinsic_path = config.DATASET.TEST_INTRINSIC_PATH
-        # DPT weight
-        self.dpt_weight_path = config.DATASET.DPT_WEIGHT_PATH
 
         # 2. dataset config
         # general options
@@ -71,7 +69,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.mgdpt_img_pad = config.DATASET.MGDPT_IMG_PAD   # True
         self.mgdpt_depth_pad = config.DATASET.MGDPT_DEPTH_PAD   # True
         self.mgdpt_df = config.DATASET.MGDPT_DF  # 8
-        self.coarse_scale = 1 / config.LOFTR.RESOLUTION[0]  # 0.125. for training loftr.
+        self.coarse_scale = 1 / config.THREEDSAM.RESOLUTION[2]  # 0.125. for training loftr.
 
         # 3.loader parameters
         self.train_loader_params = {
@@ -123,6 +121,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
             self.rank = 0
             logger.warning(str(ae) + " (set wolrd_size=1 and rank=0)")
 
+
         if stage == 'fit':
             self.train_dataset = self._setup_dataset(
                 self.train_data_root,
@@ -143,7 +142,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
                         npz_root,
                         npz_list,
                         self.val_intrinsic_path,
-                        self.dpt_weight_path,
                         mode='val',
                         min_overlap_score=self.min_overlap_score_test,
                         pose_dir=self.val_pose_root))
@@ -153,7 +151,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
                     self.val_npz_root,
                     self.val_list_path,
                     self.val_intrinsic_path,
-                    self.dpt_weight_path,
                     mode='val',
                     min_overlap_score=self.min_overlap_score_test,
                     pose_dir=self.val_pose_root)
@@ -164,7 +161,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
                 self.test_npz_root,
                 self.test_list_path,
                 self.test_intrinsic_path,
-                self.dpt_weight_path,
                 mode='test',
                 min_overlap_score=self.min_overlap_score_test,
                 pose_dir=self.test_pose_root)
@@ -175,7 +171,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
                        split_npz_root,
                        scene_list_path,
                        intri_path,
-                       dpt_weight_path, 
                        mode='train',
                        min_overlap_score=0.,
                        pose_dir=None):
@@ -192,7 +187,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         dataset_builder = self._build_concat_dataset_parallel \
                             if self.parallel_load_data \
                             else self._build_concat_dataset
-        return dataset_builder(data_root, local_npz_names, split_npz_root, intri_path, dpt_weight_path, 
+        return dataset_builder(data_root, local_npz_names, split_npz_root, intri_path,  
                                 mode=mode, min_overlap_score=min_overlap_score, pose_dir=pose_dir)
 
     def _build_concat_dataset(
@@ -246,7 +241,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
         npz_names,
         npz_dir,
         intrinsic_path,
-        dpt_weight_path, 
         mode,
         min_overlap_score=0.,
         pose_dir=None,
@@ -264,7 +258,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
                         data_root,
                         osp.join(npz_dir, x),
                         intrinsic_path,
-                        dpt_weight_path,
                         mode=mode,
                         min_overlap_score=min_overlap_score,
                         augment_fn=augment_fn,

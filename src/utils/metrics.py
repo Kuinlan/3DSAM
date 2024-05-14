@@ -125,7 +125,7 @@ def compute_pose_errors(data, config):
         if ret is None:
             data['R_errs'].append(np.inf)
             data['t_errs'].append(np.inf)
-            data['inliers'].append(np.array([]).astype(np.bool))
+            data['inliers'].append(np.array([]).astype(bool))
         else:
             R, t, inliers = ret
             t_err, R_err = relative_pose_error(T_0to1[bs], R, t, ignore_gt_t_thr=0.0)

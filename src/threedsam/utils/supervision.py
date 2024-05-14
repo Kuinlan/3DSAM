@@ -119,12 +119,12 @@ def spvs_coarse(data, config):
         anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0) 
         anchor_ids_gt.append(anchor_index)
 
-    anchor_ids_gt = torch.stack(anchor_ids_gt, dim=0) if len(anchor_ids_gt) > 0 else None # [N, NUM_ANCHOR]
+    anchor_ids_gt = torch.stack(anchor_ids_gt, dim=0) if len(anchor_ids_gt) > 0 else None # [N', NUM_ANCHOR]
 
     data.update({
         'train_pad_anchor_num_min': train_pad_anchor_num_min, 
-        'num_match_gt': num_match_gt,  # [N, ] 
-        'anchor_ids_gt': anchor_ids_gt,  # [N, NUM_ANCHOR]
+        'num_match_gt': num_match_gt,  # [N', ] 
+        'anchor_ids_gt': anchor_ids_gt,  # [N', NUM_ANCHOR]
         'skip_sample': skip_sample
     })
 
@@ -171,8 +171,8 @@ def spvs_fine(data, config):
     # 1. misc
     # w_pt0_i, pt1_i = data.pop('spv_w_pt0_i'), data.pop('spv_pt1_i')
     w_pt0_i, pt1_i = data['spv_w_pt0_i'], data['spv_pt1_i']
-    scale = config['LOFTR']['RESOLUTION'][1]
-    radius = config['LOFTR']['FINE_WINDOW_SIZE'] // 2
+    scale = config['THREEDSAM']['RESOLUTION'][1]
+    radius = config['THREEDSAM']['FINE_WINDOW_SIZE'] // 2
 
     # 2. get coarse prediction
     b_ids, i_ids, j_ids = data['b_ids'], data['i_ids'], data['j_ids']

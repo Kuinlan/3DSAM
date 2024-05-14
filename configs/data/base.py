@@ -32,7 +32,4 @@ _CN.DATASET.TEST_INTRINSIC_PATH = None
 _CN.DATASET.MIN_OVERLAP_SCORE_TRAIN = 0.4
 _CN.DATASET.MIN_OVERLAP_SCORE_TEST = 0.0  # for both test and val
 
-# DPT config
-_CN.DATASET.DATASET.DPT_WEIGHT_PATH = "weights/dpt/dpt_hybrid_nyu-2ce69ec7.pt"
-
 cfg = _CN

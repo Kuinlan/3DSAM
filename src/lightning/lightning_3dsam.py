@@ -9,7 +9,9 @@ import numpy as np
 import pytorch_lightning as pl
 from matplotlib import pyplot as plt
 
+from src.dpt import init_dpt
 from src.threedsam import ThreeDSAM
+from src.threedsam.utils.geometry import get_point_cloud
 from src.threedsam.utils.supervision import compute_supervision_coarse, compute_supervision_fine
 from src.losses.threedsam_loss import ThreeDSAMLoss
 from src.optimizers import build_optimizer, build_scheduler
@@ -18,6 +20,7 @@ from src.utils.metrics import (
     compute_pose_errors,
     aggregate_metrics
 )
+
 from src.utils.plotting import make_matching_figures
 from src.utils.comm import gather, all_gather
 from src.utils.misc import lower_config, flattenList
@@ -37,6 +40,9 @@ class PL_3DSAM(pl.LightningModule):
         self.threedsam_cfg = lower_config(_config['threedsam'])
         self.profiler = profiler or PassThroughProfiler()
         self.n_vals_plot = max(config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1)
+
+        # DPT
+        self.dpt = init_dpt(self.config['DPT']['WEIGHT_PATH'])
 
         # Matcher: ThreeDSAM
         self.matcher = ThreeDSAM(config=_config['threedsam'])
@@ -80,6 +86,9 @@ class PL_3DSAM(pl.LightningModule):
         optimizer.zero_grad()
     
     def _trainval_inference(self, batch):
+        with self.profiler.profile("get 3D structure info from DPT"):
+            self._update_point_cloud(batch)
+
         with self.profiler.profile("Compute coarse supervision"):
             compute_supervision_coarse(batch, self.config)
         
@@ -108,6 +117,23 @@ class PL_3DSAM(pl.LightningModule):
                 'inliers': batch['inliers']}
             ret_dict = {'metrics': metrics}
         return ret_dict, rel_pair_names
+
+    def _update_point_cloud(self, batch):
+        input0 = batch['image_color0']  # (N, h, w, 3)
+        input1 = batch['image_color1']
+        K0 = batch['K0']  # (N, 3, 3)
+        K1 = batch['K1']
+        prediction0 = self.dpt.forward(input0)  # (N, h, w)
+        prediction1 = self.dpt.forward(input1)  # (N, h, w)
+        prediction0 = prediction0 * 1000.0
+        prediction1 = prediction1 * 1000.0
+        pts_3d0 = get_point_cloud(prediction0, K0)
+        pts_3d1 = get_point_cloud(prediction1, K1)
+
+        batch.update({
+            'pts_3d0': pts_3d0,
+            'pts_3d1': pts_3d1
+        }) 
     
     def training_step(self, batch, batch_idx):
         self._trainval_inference(batch)

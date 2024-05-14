@@ -6,7 +6,7 @@ from typing import Dict
 from .linear_attention import One2ManyAttention
 from ..utils.geometry import get_epipolar_line_std
 
-from variable_gather import gather_index
+# from variable_gather import gather_index
 
 @torch.no_grad()
 def get_mask(coord, lines, mode, area_width):
@@ -168,10 +168,22 @@ class CrossAttention(nn.Module):
 
         lines, mode = get_epipolar_line_std(coord, R, t, K0, K1)  # [N, L, 2], [N, L]       
         mask_within_area = get_mask(coord, lines, mode, area_width) 
-        output = gather_index(mask_within_area, self.max_candidate_num) 
+        index, mask = self.gather_index(mask_within_area) 
 
-        return output
+        return index, mask
 
+    @torch.no_grad()
+    def gather_index(self, x):
+        N, L, _ = x.shape
+        C = self.max_candidate_num
+        indices = torch.arange(L, device=x.device, dtype=torch.int64)[None][None].repeat(N, L, 1)  # [N, L, L]
+        true_indices = torch.where(x, indices, torch.tensor(0, device=x.device, dtype=torch.int64))  # [N, L, L]
+        true_indices, _ = torch.sort(true_indices, dim=-1)
+        indices_output = true_indices[..., -C-1:-1]  # [N, L, C]
+        mask = indices_output != 0  # [N, L, C]
+
+        return indices, mask
+        
 @torch.no_grad()
 def get_scaled_K(K: torch.Tensor, scale):
     if K.dim() == 2:

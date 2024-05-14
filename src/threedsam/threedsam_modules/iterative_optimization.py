@@ -14,7 +14,7 @@ class IterativeOptimization(nn.Module):
         self.struct_extractor = StructureExtractor(config['extractor'])
         self.epipolar_attention = EpipolarAttention(config['epipolar_attention'])
         self.self_attention = LocalFeatureTransformer(config['self_attention'])
-        self.feat_fusion = FeatureFusion(config['resnet_fpn'])
+        self.feat_fusion = FeatureFusion(config['resnetfpn'])
 
     def forward(self, feats_8, feats_16, feats_32, data):
         feat0_8, feat1_8 = feats_8
