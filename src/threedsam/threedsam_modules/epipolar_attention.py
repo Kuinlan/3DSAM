@@ -180,10 +180,10 @@ class CrossAttention(nn.Module):
         indices = torch.arange(L, device=x.device, dtype=torch.int64)[None][None].repeat(N, L, 1)  # [N, L, L]
         true_indices = torch.where(x, indices, torch.tensor(0, device=x.device, dtype=torch.int64))  # [N, L, L]
         true_indices, _ = torch.sort(true_indices, dim=-1)
-        indices_output = true_indices[..., -C-1:-1]  # [N, L, C]
+        indices_output = true_indices[..., -C:]  # [N, L, C]
         mask = indices_output != 0  # [N, L, C]
 
-        return indices, mask
+        return indices_output, mask
 
         
 @torch.no_grad()

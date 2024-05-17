@@ -52,7 +52,7 @@ class StructureExtractor(nn.Module):
             nn.Linear(self.dim_color+self.dim_struct, self.dim_color), 
         )
 
-    def forward(self, feat0, feat1, data):
+    def forward(self, feat0, feat1, match_mask, data):
         """
         Args:
             feat0 (torch.Tensor): [N, L, C]
@@ -81,24 +81,26 @@ class StructureExtractor(nn.Module):
         scale = data['hw0_i'][0] // data['hw0_c_8'][0]  # 8
         pts_3d0 = data['pts_3d0'] # [N, L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1']
-        mask = data['match_mask']
+        mask = match_mask
         
         # 1.get anchor index 
-        mask_v, all_j_ids = mask.max(dim=2)
-        b_ids, i_ids = torch.where(mask_v)
-        j_ids = all_j_ids[b_ids, i_ids]
-        anchor_num = mask.sum(dim=(1, 2)).to(torch.int32)  # [N, ]
+        # mask_v, all_j_ids = mask.max(dim=2)
+        # b_ids, i_ids = torch.where(mask_v)
+        # j_ids = all_j_ids[b_ids, i_ids]
+        # anchor_num = mask.sum(dim=(1, 2)).to(torch.int32)  # [N, ]
 
-        # 2.anchor index padding 
-        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, anchor_num, (i_ids, j_ids),
-                                                            self.train_anchor_num, self.pad_num_min,
-                                                            self.training)  # [N, ANCHOR_NUM]
+        # 1.anchor index padding 
+        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, mask, 
+                                                          self.train_anchor_num, 
+                                                          self.pad_num_min, 
+                                                          self.training)  # [N, ANCHOR_NUM]
+                                                    
         pts_2d0 = torch.stack([anchor_i_ids % data['hw0_c_8'][1], 
                                 anchor_i_ids // data['hw0_c_8'][1]], dim=-1).to(torch.float32)  # [N, ANCHOR_NUM, 2]
         pts_2d1 = torch.stack([anchor_j_ids % data['hw1_c_8'][1], 
                                 anchor_j_ids // data['hw1_c_8'][1]], dim=-1).to(torch.float32)
         
-        # 3.estimate relative pose using anchor points
+        # 2.estimate relative pose using anchor points
         Rs = []
         ts = []
         for b in range(N):
@@ -113,13 +115,13 @@ class StructureExtractor(nn.Module):
 
         data.update(epipolar_info = epipolar_info)
 
-        # 4. compute 3D relative position to anchor points
+        # 3. compute 3D relative position to anchor points
         anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
         anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
 
         grid_c = create_meshgrid(data['hw0_c_8'][0], data['hw0_c_8'][1], False, pts_3d0.device, torch.int64)
         grid_c = (grid_c * scale).reshape(-1, 2)  # [L, 2] 
-        inds_c = data['hw0_c_8'][1] * grid_c[:, 1] + grid_c[:, 0]  # [N, ]
+        inds_c = data['hw0_c_8'][1] * grid_c[:, 1] + grid_c[:, 0]  # [L, ]
         pts_3d0_c = pts_3d0[:, inds_c, :]  # [N, L, 3]
         pts_3d1_c = pts_3d1[:, inds_c, :]
         # pts_3d0_c = pts_3d0.view(N, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
@@ -137,7 +139,7 @@ class StructureExtractor(nn.Module):
         structured_feat0 = structured_feat0.transpose(-1, -2).contiguous().view(N, L, -1)  # [N, L, 4 * ANCHOR_NUM]
         structured_feat1 = structured_feat1.transpose(-1, -2).contiguous().view(N, L, -1)
 
-        # 5. feature augmentation
+        # 4. feature augmentation
         augmented_feat0 = self.mlp(torch.cat([feat0, structured_feat0], dim=-1));  # [N, L, D_COLOR + D_STRUCT]
         augmented_feat1 = self.mlp(torch.cat([feat1, structured_feat1], dim=-1));  
 

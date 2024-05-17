@@ -45,7 +45,6 @@ def spvs_coarse(data, config):
     h0, w0, h1, w1 = map(lambda x: x // scale, [H0, W0, H1, W1])
     anchor_num = config['THREEDSAM']['EXTRACTOR']['ANCHOR_NUM'] 
     train_pad_anchor_num_min = config['THREEDSAM']['EXTRACTOR']['TRAIN_PAD_ANCHOR_NUM_MIN'] 
-    seed = config['THREEDSAM']['EXTRACTOR']['ANCHOR_SAMPLER_SEED'] 
 
     # 2. warp grids
     # create kpts in meshgrid and resize them to image resolution
@@ -90,44 +89,33 @@ def spvs_coarse(data, config):
 
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
     data.update({'conf_matrix_gt': conf_matrix_gt})
-    
-    # prepare gt matches for anchor points padding
-    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)
-    cumsum_match_gt = num_match_gt.cumsum(dim=0)
 
-    skip_sample = num_match_gt < anchor_num
-    if skip_sample.sum(dim=0) > 0:
-        non_skip_ids = torch.where(~skip_sample)[0]
-    else:
-        non_skip_ids = torch.arange(0, N, 1)
+    # anchor_ids_gt = []
+    # for idx in non_skip_ids:
+    #     low = 0 if idx == 0 else cumsum_match_gt[idx-1]
+    #     high = cumsum_match_gt[idx]
+    #     # no replacement
+    #     anchor_index_fixed = (
+    #         torch.randperm(num_match_gt[idx], device=device) + low
+    #     )[:train_pad_anchor_num_min]
+    #     # with replacement
+    #     anchor_index_non_fixed = (
+    #         torch.randint(
+    #             low, high, (anchor_num - train_pad_anchor_num_min, ),
+    #             dtype=torch.int64, device=device
+    #         )
+    #     )
+    #     anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0)
+    #     anchor_ids_gt.append(anchor_index)
 
-    anchor_ids_gt = []
-    for idx in non_skip_ids:
-        low = 0 if idx == 0 else cumsum_match_gt[idx-1]
-        high = cumsum_match_gt[idx]
-        # no replacement
-        anchor_index_fixed = (
-            torch.randperm(num_match_gt[idx], device=device) + low
-        )[:train_pad_anchor_num_min]
-        # with replacement
-        anchor_index_non_fixed = (
-            torch.randint(
-                low, high, (anchor_num - train_pad_anchor_num_min, ),
-                dtype=torch.int64, device=device
-            )
-        )
-        anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0) 
-        anchor_ids_gt.append(anchor_index)
+    # anchor_ids_gt = torch.stack(sample_index, dim=0) if len(anchor_ids_gt) > 0 else None # [N', NUM_ANCHOR]
 
-    anchor_ids_gt = torch.stack(anchor_ids_gt, dim=0) if len(anchor_ids_gt) > 0 else None # [N', NUM_ANCHOR]
-
-    data.update({
-        'train_pad_anchor_num_min': train_pad_anchor_num_min, 
-        'num_match_gt': num_match_gt,  # [N', ] 
-        'anchor_ids_gt': anchor_ids_gt,  # [N', NUM_ANCHOR]
-        'skip_sample': skip_sample
-    })
-
+    # data.update({
+    #     'train_pad_anchor_num_min': train_pad_anchor_num_min,
+    #     'num_match_gt': num_match_gt,  # [N', ]
+    #     'anchor_ids_gt': anchor_ids_gt,  # [N', NUM_ANCHOR]
+    #     'skip_sample': skip_sample
+    # })
 
     # 5. save coarse matches(gt) for training fine level
     if len(b_ids) == 0:
@@ -143,7 +131,52 @@ def spvs_coarse(data, config):
         'spv_j_ids': j_ids
     })
 
-    # 6. save intermediate results (for fast fine-level computation)
+    # 6. prepare gt matches for anchor points padding
+    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)
+    cumsum_match_gt = num_match_gt.cumsum(dim=0)
+    cumsum_match_gt = torch.cat(
+        [
+            torch.tensor([0], device=cumsum_match_gt.device, dtype=torch.int32),
+            cumsum_match_gt,
+        ]
+    )
+
+    skip_sample = num_match_gt < anchor_num
+    if skip_sample.sum(dim=0) > 0:
+        non_skip_ids = torch.where(~skip_sample)[0]
+    else:
+        non_skip_ids = torch.arange(0, N, 1)
+
+    low = cumsum_match_gt[non_skip_ids]
+    high = cumsum_match_gt[non_skip_ids+1]
+    sample_index = [
+        torch.cat(
+            [
+                (torch.randperm(num_match_gt[idx], device=device) + low[idx])[:train_pad_anchor_num_min],
+                torch.randint(
+                    low[idx],
+                    high[idx],
+                    (anchor_num - train_pad_anchor_num_min,),
+                    dtype=torch.int64,
+                    device=device,
+                ),
+            ],
+            dim=0,
+        )
+        for idx in non_skip_ids
+    ]
+    sample_index = torch.stack(sample_index, dim=0) if len(non_skip_ids) > 0 else None  # (N', NUM_ANCHOR)
+    if sample_index is not None:
+        anchor_i_gt = i_ids[sample_index]  # (N', NUM_ANCHOR)
+        anchor_j_gt = j_ids[sample_index]
+
+    data.update({
+        'skip_sample': skip_sample,
+        'anchor_i_gt': anchor_i_gt,
+        'anchor_j_gt': anchor_j_gt
+    })
+
+    # 7. save intermediate results (for fast fine-level computation)
     data.update({
         'spv_w_pt0_i': w_pt0_i,
         'spv_pt1_i': grid_pt1_i

@@ -42,7 +42,7 @@ class PL_3DSAM(pl.LightningModule):
         self.n_vals_plot = max(config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1)
 
         # DPT
-        self.dpt = init_dpt(self.config['DPT']['WEIGHT_PATH'])
+        self.dpt = init_dpt(self.config['DPT']['WEIGHT_PATH'], frozen=True)
 
         # Matcher: ThreeDSAM
         self.matcher = ThreeDSAM(config=_config['threedsam'])
@@ -118,13 +118,16 @@ class PL_3DSAM(pl.LightningModule):
             ret_dict = {'metrics': metrics}
         return ret_dict, rel_pair_names
 
+    @torch.no_grad()
     def _update_point_cloud(self, batch):
         input0 = batch['image_color0']  # (N, h, w, 3)
         input1 = batch['image_color1']
         K0 = batch['K0']  # (N, 3, 3)
         K1 = batch['K1']
+
         prediction0 = self.dpt.forward(input0)  # (N, h, w)
         prediction1 = self.dpt.forward(input1)  # (N, h, w)
+            
         prediction0 = prediction0 * 1000.0
         prediction1 = prediction1 * 1000.0
         pts_3d0 = get_point_cloud(prediction0, K0)

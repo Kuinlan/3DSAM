@@ -22,7 +22,7 @@ def get_point_cloud(depth, K, scale = 1):
     grid_pt_long = grid_pt.round().long()
 
     # Get depth for all points
-    kpts_depth = depth[:, grid_pt_long[:, :, 1], grid_pt_long[:, :, 0]] # (N, h, w) -> (N, h * w)
+    kpts_depth = depth[:, grid_pt_long[0, :, 1], grid_pt_long[0, :, 0]] # (N, h, w) -> (N, h * w)
      
     # Unproject
     grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, :, [0]])], dim=-1) * kpts_depth[..., None]  # (N, h * w, 3)

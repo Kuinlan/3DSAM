@@ -55,8 +55,7 @@ def compute_max_candidates(p_m0, p_m1):
         torch.min(torch.stack([h0s * w0s, h1s * w1s], -1), -1)[0])
     return max_cand
 
-@torch.no_grad()
-def get_match_mask(data, thr, border_rm):
+def get_match_mask(conf_matrix, thr, border_rm, data):
     axes_lengths = {
         'h0c': data['hw0_c_8'][0],
         'w0c': data['hw0_c_8'][1],
@@ -65,8 +64,7 @@ def get_match_mask(data, thr, border_rm):
     }
 
     # confidence thresholding
-    conf_matrix = data['conf_matrix']  # [N', L, L]
-    mask = conf_matrix > thr
+    mask = conf_matrix > thr  # (N', L, L)
     mask = rearrange(mask, 'b (h0c w0c) (h1c w1c) -> b h0c w0c h1c w1c',
                          **axes_lengths)
     if 'mask0' not in data:
@@ -85,8 +83,7 @@ def get_match_mask(data, thr, border_rm):
     return mask
 
 @torch.no_grad()
-def get_coarse_match(data, config, is_training):
-    conf_matrix = data['conf_matrix']
+def get_coarse_match(conf_matrix, config, is_training, data):
     _device = conf_matrix.device
 
     thr = config['thr']
@@ -96,7 +93,7 @@ def get_coarse_match(data, config, is_training):
     train_pad_num_gt_min = config['train_pad_num_gt_min']
 
     # 1. confidence thresholding and mutual nearest
-    mask = get_match_mask(data, thr, border_rm)
+    mask = get_match_mask(conf_matrix, thr, border_rm, data)
     
     # 2. find all valid coarse matches
     # this only works when at most one `True` in each row
