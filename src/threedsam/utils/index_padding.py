@@ -41,8 +41,8 @@ def anchor_index_padding(data, mask,
 
             sample = torch.randperm(anchor_num[n], dtype=torch.int64, device=device) + low
 
-            anc_i_ids[n, pad_num_min+pad_num[n]:] = i_ids[sample[:anchor_num_max-pad_num_min-pad_num]]
-            anc_j_ids[n, pad_num_min+pad_num[n]:] = j_ids[sample[:anchor_num_max-pad_num_min-pad_num]]
+            anc_i_ids[n, pad_num_min+pad_num[n]:] = i_ids[sample[:anchor_num_max-pad_num_min-pad_num[n]]]
+            anc_j_ids[n, pad_num_min+pad_num[n]:] = j_ids[sample[:anchor_num_max-pad_num_min-pad_num[n]]]
             
         
         shuffle = torch.randperm(anchor_num_max, dtype=torch.int64, device=device)
