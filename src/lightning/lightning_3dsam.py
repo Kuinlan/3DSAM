@@ -94,7 +94,7 @@ class PL_3DSAM(pl.LightningModule):
         
         with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)
-        
+
         with self.profiler.profile("Compute fine supervision"):
             compute_supervision_fine(batch, self.config)
             

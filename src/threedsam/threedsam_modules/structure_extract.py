@@ -45,6 +45,7 @@ class StructureExtractor(nn.Module):
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
 
+        # TODO: Using KAN to replace mlp
         # feed-forward network
         self.mlp = nn.Sequential(
             nn.Linear(self.dim_color+self.dim_struct, self.dim_color+self.dim_struct),
@@ -71,14 +72,14 @@ class StructureExtractor(nn.Module):
             augmented_feat1 (torch.Tensor): [N, S, C]
         """
         N, L, _ = feat0.shape
-        epipolar_info = dict(h0c = data['hw0_c_16'][0],
-                             w0c = data['hw0_c_16'][1],
-                             h1c = data['hw1_c_16'][0],
-                             w1c = data['hw1_c_16'][1],
-                             scale = data['hw0_i'][0] / data['hw0_c_16'][0],
+        epipolar_info = dict(h0c = data['hw0_c_32'][0],
+                             w0c = data['hw0_c_32'][1],
+                             h1c = data['hw1_c_32'][0],
+                             w1c = data['hw1_c_32'][1],
+                             scale = data['hw0_i'][0] / data['hw0_c_32'][0],
                              K0 = data['K0'], 
                              K1 = data['K1'])
-        scale = data['hw0_i'][0] // data['hw0_c_8'][0]  # 8
+        depthmap_scale = data['hw0_i'][0] // data['hw0_c_8'][0]  # 8
         pts_3d0 = data['pts_3d0'] # [N, L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1']
         mask = match_mask
@@ -120,28 +121,31 @@ class StructureExtractor(nn.Module):
         anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
 
         grid_c = create_meshgrid(data['hw0_c_8'][0], data['hw0_c_8'][1], False, pts_3d0.device, torch.int64)
-        grid_c = (grid_c * scale).reshape(-1, 2)  # [L, 2] 
+        grid_c = (grid_c * depthmap_scale).reshape(-1, 2)  # [L, 2] 
         inds_c = data['hw0_c_8'][1] * grid_c[:, 1] + grid_c[:, 0]  # [L, ]
         pts_3d0_c = pts_3d0[:, inds_c, :]  # [N, L, 3]
         pts_3d1_c = pts_3d1[:, inds_c, :]
         # pts_3d0_c = pts_3d0.view(N, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
         # pts_3d1_c = pts_3d1.view(N, 480, 640, 3)[:, ::scale, ::scale, :].flatten(1, 2)
         
-        structured_feat0 = pts_3d0_c.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
-        structured_feat1 = pts_3d1_c.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
+        structured_info0 = pts_3d0_c.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
+        structured_info1 = pts_3d1_c.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
 
-        dist0 = structured_feat0.square().sum(dim=-1, keepdim=True)  # [N, L, ANCHOR_NUM, 1]
-        dist1 = structured_feat1.square().sum(dim=-1, keepdim=True)  
+        distance0 = structured_info0.square().sum(dim=-1, keepdim=True)  # [N, L, ANCHOR_NUM, 1]
+        distance1 = structured_info1.square().sum(dim=-1, keepdim=True)  
 
-        structured_feat0 = l1_norm(torch.cat([structured_feat0, dist0], dim=-1), dim=-2) # [N, L, ANCHOR_NUM, 4]
-        structured_feat1 = l1_norm(torch.cat([structured_feat1, dist1], dim=-1), dim=-2) 
+        structured_info0 = l1_norm(torch.cat([structured_info0, distance0], dim=-1), dim=-2) # [N, L, ANCHOR_NUM, 4]
+        structured_info1 = l1_norm(torch.cat([structured_info1, distance1], dim=-1), dim=-2) 
         
-        structured_feat0 = structured_feat0.transpose(-1, -2).contiguous().view(N, L, -1)  # [N, L, 4 * ANCHOR_NUM]
-        structured_feat1 = structured_feat1.transpose(-1, -2).contiguous().view(N, L, -1)
+        structured_info0 = structured_info0.transpose(-1, -2).contiguous().view(N, L, -1)  # [N, L, 4 * ANCHOR_NUM]
+        structured_info1 = structured_info1.transpose(-1, -2).contiguous().view(N, L, -1)
 
         # 4. feature augmentation
-        augmented_feat0 = self.mlp(torch.cat([feat0, structured_feat0], dim=-1));  # [N, L, D_COLOR + D_STRUCT]
-        augmented_feat1 = self.mlp(torch.cat([feat1, structured_feat1], dim=-1));  
+        structured_feat0 = self.mlp(torch.cat([feat0, structured_info0], dim=-1));  # [N, L, D_COLOR + D_STRUCT]
+        structured_feat1 = self.mlp(torch.cat([feat1, structured_info1], dim=-1));  
 
-        return augmented_feat0, augmented_feat1
+        structured_feat0 = feat0 + structured_feat0 
+        structured_feat1 = feat1 + structured_feat1 
+
+        return structured_feat0, structured_feat1
     

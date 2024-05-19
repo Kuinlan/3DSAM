@@ -8,7 +8,7 @@ from torch.nn import Module, Dropout
 
 
 def elu_feature_map(x):
-    return torch.nn.functional.elu(x, inplace=True) + 1
+    return torch.nn.functional.elu(x) + 1
 
 
 class FullAttention(Module):
@@ -83,7 +83,7 @@ class LinearAttention(Module):
 
 class One2ManyAttention(Module):
     def __init__(self, eps=1e-6):
-        super(One2ManyAttention, self).__init__()
+        super().__init__()
         self.feature_map = elu_feature_map
         self.eps = eps
 

@@ -30,11 +30,11 @@ class IterativeOptimization(nn.Module):
         feat0_8, feat1_8 = self.struct_extractor(feat0_8, feat1_8, match_mask, data)
         epipolar_info = data['epipolar_info']
 
-        # cross attention 
-        feat0_16, feat1_16 = self.epipolar_attention(feat0_16, feat1_16, epipolar_info)
+        # self-attention 
+        feat0_16, feat1_16 = self.self_attention(feat0_16, feat1_16)
 
-        # self attention
-        feat0_32, feat1_32 = self.self_attention(feat0_32, feat1_32)
+        # cross-attention
+        feat0_32, feat1_32 = self.epipolar_attention(feat0_32, feat1_32, epipolar_info)
 
         # feature update between different level
         feat_list0 = self.feat_fusion(feat0_8, feat0_16, feat0_32, data, last_iter)

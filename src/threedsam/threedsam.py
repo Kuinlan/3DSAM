@@ -21,13 +21,13 @@ class ThreeDSAM(nn.Module):
         # Modules
         self.backbone = build_backbone(config)
         self.pos_encoding_8 = PositionEncodingSine(
-            config['coarse']['d_model'],
+            config['resnetfpn']['block_dims'][2],
             temp_bug_fix=config['coarse']['temp_bug_fix'])
         self.pos_encoding_16 = PositionEncodingSine(
-            config['coarse']['d_model']*2,
+            config['resnetfpn']['block_dims'][3],
             temp_bug_fix=config['coarse']['temp_bug_fix'])
         self.pos_encoding_32 = PositionEncodingSine(
-            config['coarse']['d_model']*4,
+            config['resnetfpn']['block_dims'][4],
             temp_bug_fix=config['coarse']['temp_bug_fix'])
         self.init_attention = LocalFeatureTransformer(config['coarse'])
         self.iterative_optimization = IterativeOptimization(config)

@@ -86,9 +86,9 @@ class FeatureFusion(nn.Module):
             feat_out16 = feat_16 + feat_8_16
             feat_out32 = feat_32 + feat_8_32
 
-            feat_out8 = rearrange(feat_8, 'b c h w -> b (h w) c', b=N, h=hw_c_8[0], w=hw_c_8[1], c=self.block_dims[2])
-            feat_out16 = rearrange(feat_16, 'b c h w -> b (h w) c', b=N, h=hw_c_16[0], w=hw_c_16[1], c=self.block_dims[3])
-            feat_out32 = rearrange(feat_32, 'b c h w -> b (h w) c', b=N, h=hw_c_32[0], w=hw_c_32[1], c=self.block_dims[4])
+            feat_out8 = rearrange(feat_out8, 'b c h w -> b (h w) c', b=N, h=hw_c_8[0], w=hw_c_8[1], c=self.block_dims[2])
+            feat_out16 = rearrange(feat_out16, 'b c h w -> b (h w) c', b=N, h=hw_c_16[0], w=hw_c_16[1], c=self.block_dims[3])
+            feat_out32 = rearrange(feat_out32, 'b c h w -> b (h w) c', b=N, h=hw_c_32[0], w=hw_c_32[1], c=self.block_dims[4])
             # feat_out8 = feat_out8.view(N, self.block_dims[2], -1).transpose(1, 2).contiguous()
             # feat_out16 = feat_out16.view(N, self.block_dims[3], -1).transpose(1, 2).contiguous()
             # feat_out32 = feat_out32.view(N, self.block_dims[4], -1).transpose(1, 2).contiguous()
@@ -96,7 +96,8 @@ class FeatureFusion(nn.Module):
             return [feat_out8, feat_out16, feat_out32]
 
         else:
-            feat_out8 = feat_out8.view(N, -1, self.block_dims[2])
+            # feat_out8 = feat_out8.view(N, -1, self.block_dims[2])
+            feat_out8 = rearrange(feat_out8, 'b c h w -> b (h w) c', b=N, c=self.block_dims[2], h=hw_c_8[0], w=hw_c_8[1])
 
             return [feat_out8]
 
