@@ -169,6 +169,9 @@ def spvs_coarse(data, config):
     if sample_index is not None:
         anchor_i_gt = i_ids[sample_index]  # (N', NUM_ANCHOR)
         anchor_j_gt = j_ids[sample_index]
+    else:
+        anchor_i_gt = None
+        anchor_j_gt = None
 
     data.update({
         'skip_sample': skip_sample,

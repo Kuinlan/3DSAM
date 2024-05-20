@@ -58,7 +58,7 @@ class StructureExtractor(nn.Module):
         Args:
             feat0 (torch.Tensor): [N, L, C]
             feat1 (torch.Tensor): [N, S, C]
-            conf_matrix (torch.Tensor): [N, L, S]
+            match_mask (torch.Tensor): [N, L, S]
             data (dict): with keys 
                 [pts_3d0 (torch.Tensor): [N, L, 3]
                  pts_3d1 (torch.Tensor): [N, L, 3]]

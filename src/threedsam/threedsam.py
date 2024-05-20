@@ -156,7 +156,8 @@ class ThreeDSAM(nn.Module):
                 feat0_32, feat1_32 = feat0_32[~skip_sample], feat1_32[~skip_sample]
                 feat0_16, feat1_16 = feat0_16[~skip_sample], feat1_16[~skip_sample]
                 feat0_8, feat1_8 = feat0_8[~skip_sample], feat1_8[~skip_sample]
-                data['conf_matrix'] = data['conf_matrix'][~skip_sample]
+                conf_matrix = conf_matrix[~skip_sample]
+                data['conf_matrix'] = conf_matrix
 
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
