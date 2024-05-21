@@ -40,12 +40,12 @@ def get_mask(coord, lines, mode, area_width):
 
     within = torch.empty((N*L, S), dtype=torch.bool, device=lines.device)
     within_y = (
-        (coord[None, :, 1] < (coord_y + area_width//2)) & 
-        (coord[None, :, 1] > (coord_y - area_width//2))
+        (coord[None, :, 1] < (coord_y + area_width/2.0)) & 
+        (coord[None, :, 1] > (coord_y - area_width/2.0))
     )  # [N', S]
     within_x = (
-        (coord[None, :, 0] < (coord_x + area_width//2)) &
-        (coord[None, :, 0] > (coord_x - area_width//2))
+        (coord[None, :, 0] < (coord_x + area_width/2.0)) &
+        (coord[None, :, 0] > (coord_x - area_width/2.0))
     )
     within[mode, :] = within_y
     within[~mode, :] = within_x
@@ -99,6 +99,7 @@ class CrossAttention(nn.Module):
             source_mask (torch.Tensor): [N, S] (optional)
         """
         
+        N = x.shape[0]
         device = x.device
         # Get info for epipolar geometry calculation
         H = epipolar_info['h0c']
@@ -118,7 +119,6 @@ class CrossAttention(nn.Module):
         
         query, key, value = x, source, source
 
-        N = x.shape[0]
         C = self.max_candidate_num
 
         # projection

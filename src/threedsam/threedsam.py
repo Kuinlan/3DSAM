@@ -201,12 +201,12 @@ class ThreeDSAM(nn.Module):
             C = feat0_8.shape[-1]
             _, L, S = conf_matrix.shape 
 
-            feat0_8_all = torch.empty((N, L, C))
-            feat1_8_all = torch.empty((N, S, C))
+            feat0_8_all = torch.empty((N, L, C), device=feat0_8.device)
+            feat1_8_all = torch.empty((N, S, C), device=feat1_8.device)
             feat0_8_all[skip_sample], feat1_8_all[skip_sample] = feat0_8_skip, feat1_8_skip
             feat0_8_all[~skip_sample], feat1_8_all[~skip_sample] = feat0_8, feat1_8
 
-            conf_matrix_all = torch.empty((N, L, S))
+            conf_matrix_all = torch.empty((N, L, S), device=conf_matrix.device)
             conf_matrix_all[skip_sample] = conf_matrix_skip 
             conf_matrix_all[~skip_sample] = conf_matrix 
 
