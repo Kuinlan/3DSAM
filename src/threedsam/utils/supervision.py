@@ -147,15 +147,15 @@ def spvs_coarse(data, config):
     else:
         non_skip_ids = torch.arange(0, N, 1)
 
-    low = cumsum_match_gt[non_skip_ids]
-    high = cumsum_match_gt[non_skip_ids+1]
+    # low = cumsum_match_gt[non_skip_ids]
+    # high = cumsum_match_gt[non_skip_ids+1]
     sample_index = [
         torch.cat(
             [
-                (torch.randperm(num_match_gt[idx], device=device) + low[idx])[:train_pad_anchor_num_min],
+                (torch.randperm(num_match_gt[idx], device=device) + cumsum_match_gt[idx])[:train_pad_anchor_num_min],
                 torch.randint(
-                    low[idx],
-                    high[idx],
+                    cumsum_match_gt[idx],
+                    cumsum_match_gt[idx+1],
                     (anchor_num - train_pad_anchor_num_min,),
                     dtype=torch.int64,
                     device=device,
