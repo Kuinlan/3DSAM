@@ -1,57 +1,8 @@
 import torch
 import torch.nn as nn
-from kornia.utils import create_meshgrid
 from typing import Dict
 
 from .linear_attention import One2ManyAttention
-from ..utils.geometry import get_epipolar_line_std
-
-# from variable_gather import gather_index
-
-@torch.no_grad()
-def get_mask(coord, lines, mode, area_width):
-    """
-    Args:
-        coord (torch.Tensor): [N, S, 2]
-        lines (torch.Tensor): [N, L, 3]
-        mode  (torch.Tensor): [N, L]
-
-    Return:
-        within (torch.Tensor): [N, L, S]
-    """  
-    S = coord.shape[1]
-    N, L = lines.shape[0:2]
-    coord = coord[0]
-    lines = lines.flatten(0, 1)  # [N*L, 3]
-    mode = mode.flatten(0, 1)  # [N*L,]
-
-    # Ax + By + C = 0 -> y = kx + b
-    line_y = -lines[mode][:, [0, 2]] / lines[mode, 1].unsqueeze(-1)
-    # Ax + By + C = 0 -> x = (1/k)y + 1/b
-    line_x = -lines[~mode][:, [1, 2]] / lines[~mode, 0].unsqueeze(-1)
-
-    coord_y = torch.einsum(
-        'l,s->ls', line_y[:, 0], coord[:, 0]
-    ) + line_y[:, 1].unsqueeze(dim=-1)  # [N', S]
-    coord_x = torch.einsum(
-        'l,s->ls', line_x[:, 0], coord[:, 1]
-    ) + line_x[:, 1].unsqueeze(dim=-1)  # [N'', S]
-
-
-    within = torch.empty((N*L, S), dtype=torch.bool, device=lines.device)
-    within_y = (
-        (coord[None, :, 1] < (coord_y + area_width/2.0)) & 
-        (coord[None, :, 1] > (coord_y - area_width/2.0))
-    )  # [N', S]
-    within_x = (
-        (coord[None, :, 0] < (coord_x + area_width/2.0)) &
-        (coord[None, :, 0] > (coord_x - area_width/2.0))
-    )
-    within[mode, :] = within_y
-    within[~mode, :] = within_x
-    within = within.view(N, L, S)
-
-    return within  
 
 
 class CrossAttention(nn.Module):
@@ -74,7 +25,7 @@ class CrossAttention(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
-        self.attention = One2ManyAttention()
+        self.attention = One2ManyAttention(self.dim, self.nhead, self.area_width)
         self.merge = nn.Linear(d_model, d_model, bias=False)
 
         # feed-forward network
@@ -94,57 +45,21 @@ class CrossAttention(nn.Module):
             x (torch.Tensor): [N, L, C]
             source (torch.Tensor): [N, S, C]
             epipolar_info (dict)
-            direction (String)
+            direction (String): '0to1' or '1to0'
             x_mask (torch.Tensor): [N, L] (optional)
             source_mask (torch.Tensor): [N, S] (optional)
         """
         
-        N = x.shape[0]
-        device = x.device
-        # Get info for epipolar geometry calculation
-        H = epipolar_info['h0c']
-        W = epipolar_info['w0c']
-        K0 = epipolar_info['K0'].clone()
-        K1 = epipolar_info['K1'].clone()
-        scale = epipolar_info['scale']
-        R = epipolar_info['R']
-        t = epipolar_info['t']
-
-        K0 = get_scaled_K(K0, scale)
-        K1 = get_scaled_K(K1, scale)
-        self.max_candidate_num = max(H, W) * self.area_width
-        self.coord = create_meshgrid(
-            H, W, False, K0.device
-        ).flatten(1, 2)  # [1, L, 2] - <x, y>
-        
+        bs = x.shape[0]
         query, key, value = x, source, source
 
-        C = self.max_candidate_num
+        # multi-head attention
+        query = self.q_proj(query).view(bs, -1, self.nhead, self.dim)  # [N, L, (H, D)]
+        key = self.k_proj(key).view(bs, -1, self.nhead, self.dim)  # [N, S, (H, D)]
+        value = self.v_proj(value).view(bs, -1, self.nhead, self.dim)
 
-        # projection
-        query = self.q_proj(query)
-        key = self.k_proj(key) 
-        value = self.v_proj(value)
-
-        # pick up candidate information
-        if direction == '0to1':
-            index, mask = self.get_candidate_index(
-                R, t, K0, K1, self.area_width)  
-        elif direction == '1to0':
-            R = R.transpose(1, 2)
-            t = -R @ t 
-            index, mask = self.get_candidate_index(
-                R, t, K1, K0, self.area_width)
-        else:
-            raise KeyError
-
-        query = query.view(N, -1, self.dim, self.nhead)  # [N, L, H, D]
-        key =  key[torch.arange(N, device=device)[..., None][..., None], 
-                   index, :].view(N, -1, C, self.dim, self.nhead)  # [N, L, C, H, D]
-        value = value[torch.arange(N, device=device)[..., None][..., None], 
-                      index, :].view(N, -1, C, self.dim, self.nhead)
-        message = self.attention(query, key, value, x_mask, mask)  # [N, L, H, D]
-        message = self.merge(message.view(N, -1, self.nhead*self.dim)) 
+        message = self.attention(query, key, value, epipolar_info, direction, x_mask, source_mask)  # [N, L, H, D]
+        message = self.merge(message.view(bs, -1, self.nhead*self.dim))  # [N, L, D]
         message = self.norm1(message)
 
         # ffn
@@ -153,50 +68,7 @@ class CrossAttention(nn.Module):
 
         return x + message
 
-    @torch.no_grad()
-    def get_candidate_index(self, R, t, K0, K1, area_width = 5):
-        """
-        Args:
-            area_width: int
-        Return:
-            output (List[torch.Tensor]):
-                padded_index (torch.Tensor): [N, L, C]
-                valid_mask (torch.Tensor): [N, L, C]
-        """
-        # compute epipolar lines
-        coord  = self.coord  # [N, L, 2]
 
-        lines, mode = get_epipolar_line_std(coord, R, t, K0, K1)  # [N, L, 2], [N, L]       
-        mask_within_area = get_mask(coord, lines, mode, area_width) # [N, L, S] 
-        # output = gather_index(mask_within_area, self.max_candidate_num) 
-        index, mask = self.gather_index(mask_within_area)
-
-        return index, mask
-    
-    @torch.no_grad()
-    def gather_index(self, x):
-        C = self.max_candidate_num
-        N, L, _ = x.shape
-        indices = torch.arange(L, device=x.device, dtype=torch.int64)[None][None].repeat(N, L, 1)  # [N, L, L]
-        true_indices = torch.where(x, indices, torch.tensor(0, device=x.device, dtype=torch.int64))  # [N, L, L]
-        true_indices, _ = torch.sort(true_indices, dim=-1)
-        indices_output = true_indices[..., -C:]  # [N, L, C]
-        mask = indices_output != 0  # [N, L, C]
-
-        return indices_output, mask
-
-        
-@torch.no_grad()
-def get_scaled_K(K: torch.Tensor, scale):
-    if K.dim() == 2:
-        K[:2, :] = K[:2, :] / scale
-    elif K.dim() == 3:
-        K[:, :2, :] = K[:, :2, :] / scale
-    else:
-        raise ValueError("Expected tensor of shape: [N, 3, 3] or [3, 3]")
-
-    return K
-     
 class EpipolarAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -212,7 +84,6 @@ class EpipolarAttention(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p) 
 
-        
     def forward(self, feat0, feat1, epipolar_info: Dict,
                 mask0=None, mask1=None):
         """
@@ -225,8 +96,9 @@ class EpipolarAttention(nn.Module):
         """
         assert self.d_model == feat0.size(2), "the feature number of src and transformer must be equal"
 
-        # multi-head one to many attention
+        # multi-head one to many attention or regular cross-attention if R, t are unsolved
         feat0 = self.layer(feat0, feat1, epipolar_info, '0to1', mask0, mask1)
         feat1 = self.layer(feat1, feat0, epipolar_info, '1to0', mask1, mask0)
 
         return feat0, feat1
+

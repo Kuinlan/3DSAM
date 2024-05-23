@@ -11,12 +11,9 @@ INF = 1e9
 
 @torch.no_grad()
 def estimate_pose(kpts0, kpts1):
-    device = kpts0.device
-    N = kpts0.shape[0]
     E_mat = find_essential(kpts0, kpts1)
-    if E_mat.allclose(torch.eye(3, dtype=torch.float32, device=device).unsqueeze(dim=0), rtol=1e-2):
-        R = torch.eye(3, dtype=torch.float32, device=device).unsqueeze(dim=0)
-        t = torch.zeros((3, 1), dtype=torch.float32, device=device).unsqueeze(dim=0)
+    if E_mat == None:
+        return None, None
     else:
         R, _, t = decompose_essential_matrix(E_mat)
 
@@ -32,6 +29,7 @@ def l1_norm(tensor: torch.Tensor, dim: int):
     """
     norm = tensor.norm(p=1, dim=dim, keepdim=True) 
     normed = tensor / norm
+
     return normed
 
 
@@ -52,6 +50,7 @@ class StructureExtractor(nn.Module):
             nn.ReLU(True),
             nn.Linear(self.dim_color+self.dim_struct, self.dim_color), 
         )
+
 
     def forward(self, feat0, feat1, match_mask, data):
         """
@@ -85,12 +84,6 @@ class StructureExtractor(nn.Module):
         pts_3d0 = data['pts_3d0'][~skip_sample] # [N', L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1'][~skip_sample]
         mask = match_mask
-        
-        # 1.get anchor index 
-        # mask_v, all_j_ids = mask.max(dim=2)
-        # b_ids, i_ids = torch.where(mask_v)
-        # j_ids = all_j_ids[b_ids, i_ids]
-        # anchor_num = mask.sum(dim=(1, 2)).to(torch.int32)  # [N, ]
 
         # 1.anchor index padding 
         anchor_i_ids, anchor_j_ids = anchor_index_padding(data, mask, 
@@ -106,13 +99,25 @@ class StructureExtractor(nn.Module):
         # 2.estimate relative pose using anchor points
         Rs = []
         ts = []
+        solved_sample = []
+
         for b in range(N):
             R, t = estimate_pose(pts_2d0[[b], ...], pts_2d1[[b], ...] )
+            if R == None and t == None:  # unable to solve
+                solved_sample.append(False)
+                R = torch.zeros((1, 3, 3), device=pts_2d0.device, dtype=torch.float32) 
+                t = torch.zeros((1, 3, 1), device=pts_2d0.device, dtype=torch.float32) 
+            else:
+                solved_sample.append(True)
+
             Rs.append(R)
             ts.append(t)
 
+        solved_sample = torch.tensor(solved_sample, device=pts_2d0.device)
         R = torch.cat(Rs, dim=0)
         t = torch.cat(ts, dim=0)
+
+        epipolar_info['solved_sample'] = solved_sample
         epipolar_info['R'] = R
         epipolar_info['t'] = t
 

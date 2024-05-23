@@ -44,16 +44,15 @@ def anchor_index_padding(data, mask,
             anc_i_ids[n, pad_num_min+pad_num[n]:] = i_ids[sample[:anchor_num_max-pad_num_min-pad_num[n]]]
             anc_j_ids[n, pad_num_min+pad_num[n]:] = j_ids[sample[:anchor_num_max-pad_num_min-pad_num[n]]]
             
-        
         shuffle = torch.randperm(anchor_num_max, dtype=torch.int64, device=device)
         anc_i_ids = anc_i_ids[:, shuffle]
         anc_j_ids = anc_j_ids[:, shuffle]
 
     else:  
-        sample_index = torch.randint(low=0, high=anchor_num[0], size=(1, anchor_num_max), 
+        sample_index = torch.randint(low=0, high=anchor_num[0], size=(anchor_num_max, ), 
                                      dtype=torch.int64, device=device)  
-        anc_i_ids = i_ids[sample_index]  # [1, ANCHOR_NUM]
-        anc_j_ids = j_ids[sample_index]
+        anc_i_ids = i_ids[sample_index][None]  # [1, ANCHOR_NUM]
+        anc_j_ids = j_ids[sample_index][None]
 
     return anc_i_ids, anc_j_ids
     # if is_training:

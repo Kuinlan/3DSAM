@@ -232,6 +232,9 @@ class PL_3DSAM(pl.LightningModule):
             self.log(f'auc@{thr}', torch.tensor(np.mean(multi_val_metrics[f'auc@{thr}'])))  # ckpt monitors on this
 
     def test_step(self, batch, batch_idx):
+        with self.profiler.profile("get 3D structure info from DPT"):
+            self._update_point_cloud(batch)
+            
         with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)
 
