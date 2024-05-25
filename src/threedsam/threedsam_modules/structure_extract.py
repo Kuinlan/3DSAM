@@ -1,23 +1,13 @@
 import torch
 import torch.nn as nn
-
-from kornia.geometry.epipolar import find_essential, decompose_essential_matrix
+import numpy as np
+import cv2 
 from kornia.utils import create_meshgrid
 
 from ..utils.index_padding import anchor_index_padding
+from ..utils.geometry import estimate_pose
 
 INF = 1e9
-
-
-@torch.no_grad()
-def estimate_pose(kpts0, kpts1):
-    E_mat = find_essential(kpts0, kpts1)
-    if E_mat == None:
-        return None, None
-    else:
-        R, _, t = decompose_essential_matrix(E_mat)
-
-    return R, t 
 
 
 @torch.no_grad()
@@ -71,6 +61,7 @@ class StructureExtractor(nn.Module):
             augmented_feat1 (torch.Tensor): [N, S, C]
         """
         N, L, _ = feat0.shape
+        _device = feat0.device
         skip_sample = data['skip_sample']
         epipolar_info = dict(h0c = data['hw0_c_32'][0],
                              w0c = data['hw0_c_32'][1],
@@ -97,27 +88,11 @@ class StructureExtractor(nn.Module):
                                 anchor_j_ids // data['hw1_c_8'][1]], dim=-1).to(torch.float32)
         
         # 2.estimate relative pose using anchor points
-        Rs = []
-        ts = []
-        solved_sample = []
+        K0 = data['K0'][~skip_sample].clone()
+        K1 = data['K1'][~skip_sample].clone()
+        R, t = estimate_pose(pts_2d0, pts_2d1, K0, K1)
 
-        for b in range(N):
-            R, t = estimate_pose(pts_2d0[[b], ...], pts_2d1[[b], ...] )
-            if R == None and t == None:  # unable to solve
-                solved_sample.append(False)
-                R = torch.zeros((1, 3, 3), device=pts_2d0.device, dtype=torch.float32) 
-                t = torch.zeros((1, 3, 1), device=pts_2d0.device, dtype=torch.float32) 
-            else:
-                solved_sample.append(True)
-
-            Rs.append(R)
-            ts.append(t)
-
-        solved_sample = torch.tensor(solved_sample, device=pts_2d0.device)
-        R = torch.cat(Rs, dim=0)
-        t = torch.cat(ts, dim=0)
-
-        epipolar_info['solved_sample'] = solved_sample
+        epipolar_info['solved_sample'] = torch.ones((N, ), dtype=torch.bool, device=_device)
         epipolar_info['R'] = R
         epipolar_info['t'] = t
 

@@ -1,6 +1,25 @@
 import torch
-
+import cv2
 from kornia.utils import create_meshgrid
+from kornia.geometry.epipolar import find_fundamental, decompose_essential_matrix
+
+
+# def estimate_pose_cv(kpts0: torch.Tensor, kpts1: torch.Tensor, K: torch.Tensor):
+#     kpts0 = kpts0.cpu().numpy()
+#     kpts1 = kpts1.cpu().numpy()
+#     K = K.cpu().numpy()
+#     E, mask = cv2.findEssentialMat(kpts0, kpts1, K)
+#     _, R, t, mask = cv2.recoverPose(kpts0, kpts1, )
+#     R = torch.from_numpy(R)
+#     t = torch.from_numpy(t)
+
+#     return R
+
+def estimate_pose(kpts0: torch.Tensor, kpts1: torch.Tensor, K0: torch.Tensor, K1: torch.Tensor):
+    F = find_fundamental(kpts0, kpts1)  # (N, 3, 3) 
+    E = K1.transpose(1, 2) @ F @ K0  
+    R, _, t = decompose_essential_matrix(E)
+    return R, t
 
 @torch.no_grad()
 def get_point_cloud(depth, K, scale = 1):
