@@ -62,7 +62,9 @@ class StructureExtractor(nn.Module):
         """
         N, L, _ = feat0.shape
         _device = feat0.device
-        skip_sample = data['skip_sample']
+
+        skip_sample = data['skip_sample'] if self.training else torch.tensor([False], dtype=torch.bool, device=_device)
+
         epipolar_info = dict(h0c = data['hw0_c_32'][0],
                              w0c = data['hw0_c_32'][1],
                              h1c = data['hw1_c_32'][0],
@@ -70,10 +72,11 @@ class StructureExtractor(nn.Module):
                              scale = data['hw0_i'][0] / data['hw0_c_32'][0],
                              K0 = data['K0'][~skip_sample], 
                              K1 = data['K1'][~skip_sample])
+
         depthmap_scale = data['hw0_i'][0] // data['hw0_c_8'][0]  # 8
-        skip_sample = data['skip_sample']
         pts_3d0 = data['pts_3d0'][~skip_sample] # [N', L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1'][~skip_sample]
+
         mask = match_mask
 
         # 1.anchor index padding 
