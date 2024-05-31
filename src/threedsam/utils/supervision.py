@@ -91,7 +91,7 @@ def spvs_coarse(data, config):
     data.update({'conf_matrix_gt': conf_matrix_gt})
 
     # anchor_ids_gt = []
-    # for idx in non_skip_ids:
+    # for idx in non_epipolar_ids:
     #     low = 0 if idx == 0 else cumsum_match_gt[idx-1]
     #     high = cumsum_match_gt[idx]
     #     # no replacement
@@ -114,7 +114,7 @@ def spvs_coarse(data, config):
     #     'train_pad_anchor_num_min': train_pad_anchor_num_min,
     #     'num_match_gt': num_match_gt,  # [N', ]
     #     'anchor_ids_gt': anchor_ids_gt,  # [N', NUM_ANCHOR]
-    #     'skip_sample': skip_sample
+    #     'non_epipolar': non_epipolar
     # })
 
     # 5. save coarse matches(gt) for training fine level
@@ -141,14 +141,14 @@ def spvs_coarse(data, config):
         ]
     )
 
-    skip_sample = num_match_gt < anchor_num
-    if skip_sample.sum(dim=0) > 0:
-        non_skip_ids = torch.where(~skip_sample)[0]
+    non_epipolar = num_match_gt < anchor_num
+    if non_epipolar.sum(dim=0) > 0:
+        non_epipolar_ids = torch.where(~non_epipolar)[0]
     else:
-        non_skip_ids = torch.arange(0, N, 1)
+        non_epipolar_ids = torch.arange(0, N, 1)
 
-    # low = cumsum_match_gt[non_skip_ids]
-    # high = cumsum_match_gt[non_skip_ids+1]
+    # low = cumsum_match_gt[non_epipolar_ids]
+    # high = cumsum_match_gt[non_epipolar_ids+1]
     sample_index = [
         torch.cat(
             [
@@ -163,9 +163,9 @@ def spvs_coarse(data, config):
             ],
             dim=0,
         )
-        for idx in non_skip_ids
+        for idx in non_epipolar_ids
     ]
-    sample_index = torch.stack(sample_index, dim=0) if len(non_skip_ids) > 0 else None  # (N', NUM_ANCHOR)
+    sample_index = torch.stack(sample_index, dim=0) if len(non_epipolar_ids) > 0 else None  # (N', NUM_ANCHOR)
     if sample_index is not None:
         anchor_i_gt = i_ids[sample_index]  # (N', NUM_ANCHOR)
         anchor_j_gt = j_ids[sample_index]
@@ -174,7 +174,7 @@ def spvs_coarse(data, config):
         anchor_j_gt = None
 
     data.update({
-        'skip_sample': skip_sample,
+        'non_epipolar': non_epipolar,
         'anchor_i_gt': anchor_i_gt,
         'anchor_j_gt': anchor_j_gt
     })

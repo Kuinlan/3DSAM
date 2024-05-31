@@ -27,6 +27,7 @@ class FinePreprocess(nn.Module):
                 nn.init.kaiming_normal_(p, mode="fan_out", nonlinearity="relu")
 
     def forward(self, feat_f0, feat_f1, feat_c0, feat_c1, data):
+        N, _, C = feat_c0.shape
         W = self.W
         stride = data['hw0_f'][0] // data['hw0_c_8'][0]
 
@@ -35,6 +36,9 @@ class FinePreprocess(nn.Module):
             feat0 = torch.empty(0, self.W**2, self.d_model_f, device=feat_f0.device)
             feat1 = torch.empty(0, self.W**2, self.d_model_f, device=feat_f0.device)
             return feat0, feat1
+
+        feat_c0 = feat_c0.rearrange(feat_c0, 'n c h w -> n (h w) c')
+        feat_c1 = feat_c1.rearrange(feat_c1, 'n c h w -> n (h w) c')
 
         # 1. unfold(crop) all local windows
         feat_f0_unfold = F.unfold(feat_f0, kernel_size=(W, W), stride=stride, padding=W//2)
@@ -54,6 +58,9 @@ class FinePreprocess(nn.Module):
                 torch.cat([feat_f0_unfold, feat_f1_unfold], 0),  # [2n, ww, cf]
                 repeat(feat_c_win, 'n c -> n ww c', ww=W**2),  # [2n, ww, cf]
             ], -1))
-            feat_f0_unfold, feat_f1_unfold = torch.chunk(feat_cf_win, 2, dim=0)
+            feat_f0_unfold, feat_f1_unfold = torch.chunk(feat_cf_win, 2, dim=0)  # [n, ww, cf]
+
+            feat_f0_unfold = rearrange(feat_f0_unfold, 'n (w w) c -> n c w w', w=W)
+            feat_f1_unfold = rearrange(feat_f1_unfold, 'n (w w) c -> n c w w', w=W)
 
         return feat_f0_unfold, feat_f1_unfold
