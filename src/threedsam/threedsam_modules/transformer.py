@@ -102,23 +102,23 @@ class LocalFeatureTransformer(nn.Module):
     def __init__(self, config):
         super(LocalFeatureTransformer, self).__init__()
         
-        self.full_config = config
         self.fp32 = not (config['mp'] or config['half'])
-        config = config['coarse']
         self.d_model = config['d_model']
         self.nhead = config['nhead']
         self.layer_names = config['layer_names']
         self.agg_size0, self.agg_size1 = config['agg_size0'], config['agg_size1']
         self.rope = config['rope']
 
+        area_width = config.get('area_width', None)
+
         if 'self' in self.layer_names:
             self_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
                                             config['no_flash'], config['rope'], config['npe'], self.fp32)
         if 'cross' in self.layer_names:
             cross_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
-                                            config['no_flash'], False, config['npe'], self.fp32, config['area_width'])
+                                            config['no_flash'], False, config['npe'], self.fp32, area_width)
         self.layers = nn.ModuleList([copy.deepcopy(self_layer) if _ == 'self' \
-                                     else copy.deepcopy(cross_layer)] for _ in self.layer_names)
+                                     else copy.deepcopy(cross_layer) for _ in self.layer_names])
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -126,7 +126,7 @@ class LocalFeatureTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, feat0, feat1, epipolar_sample, epi_info0=None, epi_info1=None, mask0=None, mask1=None, data=None):
+    def forward(self, feat0, feat1, mask0=None, mask1=None, data=None, epipolar_sample=None, epi_info0=None, epi_info1=None):
         """
         Args:
             feat0 (torch.Tensor): [N, C, H, W]
@@ -136,7 +136,7 @@ class LocalFeatureTransformer(nn.Module):
         """
         H0, W0, H1, W1 = feat0.size(-2), feat0.size(-1), feat1.size(-2), feat1.size(-1)
         bs = feat0.shape[0]
-
+        
         feature_cropped = False
         if bs == 1 and mask0 is not None and mask1 is not None:
             mask_H0, mask_W0, mask_H1, mask_W1 = mask0.size(-2), mask0.size(-1), mask1.size(-2), mask1.size(-1)
@@ -156,13 +156,16 @@ class LocalFeatureTransformer(nn.Module):
             elif name == 'cross':
                 feat0_all, feat1_all = torch.empty_like(feat0), torch.empty_like(feat1)
 
+                if epipolar_sample is None:
+                    epipolar_sample = torch.zeros((bs, ), dtype=torch.bool, device=feat0.device) 
+
                 if epipolar_sample.sum() > 0:
                     feat0_all[epipolar_sample] = layer(feat0[epipolar_sample], feat1[epipolar_sample], mask0, mask1, epi_info0, data)
-                    feat1_all[epipolar_sample] = layer(feat1[epipolar_sample], feat0[epipolar_sample], mask0, mask1, epi_info1, data)
+                    feat1_all[epipolar_sample] = layer(feat1[epipolar_sample], feat0[epipolar_sample], mask1, mask0, epi_info1, data)
                 
                 if epipolar_sample.sum() < bs:
                     feat0_all[~epipolar_sample] = layer(feat0[~epipolar_sample], feat1[~epipolar_sample], mask0, mask1)
-                    feat1_all[~epipolar_sample] = layer(feat1[~epipolar_sample], feat0[~epipolar_sample], mask0, mask1)
+                    feat1_all[~epipolar_sample] = layer(feat1[~epipolar_sample], feat0[~epipolar_sample], mask1, mask0)
             else:
                 raise KeyError
 

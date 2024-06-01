@@ -33,13 +33,6 @@ class StructureExtractor(nn.Module):
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
 
-        # feed-forward network
-        self.mlp = nn.Sequential(
-            nn.Linear(self.dim_color+self.dim_struct, self.dim_color+self.dim_struct),
-            nn.ReLU(True),
-            nn.Linear(self.dim_color+self.dim_struct, self.dim_color), 
-        )
-
     def forward(self, match_mask, data):
         """
         Args:
@@ -70,7 +63,6 @@ class StructureExtractor(nn.Module):
                              hw1_c = data['hw0_c'],
                              K0 = data['K1'][epipolar_sample], 
                              K1 = data['K0'][epipolar_sample])
-
 
         depthmap_scale = data['hw0_i'][0] // data['hw0_c'][0]  # 8
         pts_3d0 = data['pts_3d0'][epipolar_sample] # [N', L', 3], L' = 640 * 480

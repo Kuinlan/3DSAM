@@ -68,7 +68,8 @@ class ThreeDSAM(nn.Module):
         mask_c0, mask_c1 = None, None
         if 'mask0' in data:
             mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
-        feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, mask_c0, mask_c1)
+        
+        feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, None, mask_c0, mask_c1)
 
         def get_conf_matrix(feat0, feat1, data):
             feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
@@ -136,8 +137,6 @@ class ThreeDSAM(nn.Module):
             feat_f0_unfold, feat_f1_unfold = self.threedsam_fine(feat_f0_unfold, feat_f1_unfold)
 
         # 6. match fine-level
-        feat_f0_unfold = rearrange(feat_f0_unfold, 'n c w w -> n (w w) c')
-        feat_f1_unfold = rearrange(feat_f1_unfold, 'n c w w -> n (w w) c')
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
     def load_state_dict(self, state_dict, *args, **kwargs):

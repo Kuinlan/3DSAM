@@ -135,6 +135,7 @@ class One2ManyAttention(Module):
         # Compute the attention and the weighted average
         softmax_temp = 1. / query.size(3)**.5  # sqrt(D)
         A = torch.softmax(softmax_temp * QK, dim=2)
+        A = torch.nan_to_num(A, nan=0)
         m = torch.einsum("nlch,nlchd->nlhd", A, value)
 
         return m
@@ -207,7 +208,7 @@ class One2ManyAttention(Module):
         Return:
             within (torch.Tensor): [N, L, S]
         """  
-        S = self.coord.shape[1]
+        S = self.coord1.shape[1]
         N, L = lines.shape[0:2]
         coord = self.coord1[0]  # [S, 2]
         lines = lines.flatten(0, 1)  # [N*L, 3]
@@ -267,7 +268,7 @@ class One2ManyAttention(Module):
         return K
 
     def update_mask(self, mask, data):
-        pass
+        NotImplemented
 
 
 

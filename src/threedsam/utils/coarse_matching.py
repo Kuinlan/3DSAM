@@ -57,10 +57,10 @@ def compute_max_candidates(p_m0, p_m1):
 
 def get_match_mask(conf_matrix, thr, border_rm, data):
     axes_lengths = {
-        'h0c': data['hw0_c_8'][0],
-        'w0c': data['hw0_c_8'][1],
-        'h1c': data['hw1_c_8'][0],
-        'w1c': data['hw1_c_8'][1]
+        'h0c': data['hw0_c'][0],
+        'w0c': data['hw0_c'][1],
+        'h1c': data['hw1_c'][0],
+        'w1c': data['hw1_c'][1]
     }
 
     # confidence thresholding
@@ -146,14 +146,14 @@ def get_coarse_match(conf_matrix, config, is_training, data):
     coarse_matches = {'b_ids': b_ids, 'i_ids': i_ids, 'j_ids': j_ids}
 
     # 4. Update with matches in original image resolution
-    scale = data['hw0_i'][0] / data['hw0_c_8'][0]
+    scale = data['hw0_i'][0] / data['hw0_c'][0]
     scale0 = scale * data['scale0'][b_ids] if 'scale0' in data else scale
     scale1 = scale * data['scale1'][b_ids] if 'scale1' in data else scale
     mkpts0_c = torch.stack(
-        [i_ids % data['hw0_c_8'][1], i_ids // data['hw0_c_8'][1]],
+        [i_ids % data['hw0_c'][1], i_ids // data['hw0_c'][1]],
         dim=1) * scale0
     mkpts1_c = torch.stack(
-        [j_ids % data['hw1_c_8'][1], j_ids // data['hw1_c_8'][1]],
+        [j_ids % data['hw1_c'][1], j_ids // data['hw1_c'][1]],
         dim=1) * scale1
 
     # These matches is the current prediction (for visualization)
