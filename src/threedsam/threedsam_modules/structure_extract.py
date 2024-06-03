@@ -42,15 +42,14 @@ class StructureExtractor(nn.Module):
                  pts_3d1 (torch.Tensor): [N, L, 3]]
         Update:
             data (dict): {
-                'R_est' (torch.Tensor): (N, 3, 3),
-                't_est' (torch.Tensor): (N, 3, 1)
+                epipolar_info0 (dict)
+                epipolar_info1 (dict)
             }
         Returns:
             m_struct0 (torch.Tensor): [N, C, H, W]
             m_struct1 (torch.Tensor): [N, C, H, W]
         """
         N, L, S = match_mask.shape
-        _device = match_mask.device
         
         epipolar_sample = ~data['non_epipolar'] 
 
@@ -68,10 +67,8 @@ class StructureExtractor(nn.Module):
         pts_3d0 = data['pts_3d0'][epipolar_sample] # [N', L', 3], L' = 640 * 480
         pts_3d1 = data['pts_3d1'][epipolar_sample]
         
-        mask = match_mask
-
         # 1.anchor index padding 
-        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, mask, 
+        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, match_mask, 
                                                           self.train_anchor_num, 
                                                           self.pad_num_min, 
                                                           self.training)  # [N, ANCHOR_NUM]
@@ -116,16 +113,6 @@ class StructureExtractor(nn.Module):
 
         m_struct0 = rearrange(m_struct0, 'n (h w) c d -> n (d c) h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
         m_struct1 = rearrange(m_struct1, 'n (h w) c d -> n (d c) h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
-
-        # # 4. feature augmentation
-        # structured_feat0 = self.mlp(torch.cat([feat0, structured_info0], dim=-1));  # [N', L, D_COLOR + D_STRUCT]
-        # structured_feat1 = self.mlp(torch.cat([feat1, structured_info1], dim=-1));  
-
-        # structured_feat0 = feat0 + structured_feat0 
-        # structured_feat1 = feat1 + structured_feat1 
-        
-        # structured_feat0 = rearrange('n (h w) c -> n c h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
-        # structured_feat1 = rearrange('n (h w) c -> n c h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
 
         return m_struct0, m_struct1
     

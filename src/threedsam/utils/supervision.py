@@ -90,33 +90,6 @@ def spvs_coarse(data, config):
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
     data.update({'conf_matrix_gt': conf_matrix_gt})
 
-    # anchor_ids_gt = []
-    # for idx in non_epipolar_ids:
-    #     low = 0 if idx == 0 else cumsum_match_gt[idx-1]
-    #     high = cumsum_match_gt[idx]
-    #     # no replacement
-    #     anchor_index_fixed = (
-    #         torch.randperm(num_match_gt[idx], device=device) + low
-    #     )[:train_pad_anchor_num_min]
-    #     # with replacement
-    #     anchor_index_non_fixed = (
-    #         torch.randint(
-    #             low, high, (anchor_num - train_pad_anchor_num_min, ),
-    #             dtype=torch.int64, device=device
-    #         )
-    #     )
-    #     anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0)
-    #     anchor_ids_gt.append(anchor_index)
-
-    # anchor_ids_gt = torch.stack(sample_index, dim=0) if len(anchor_ids_gt) > 0 else None # [N', NUM_ANCHOR]
-
-    # data.update({
-    #     'train_pad_anchor_num_min': train_pad_anchor_num_min,
-    #     'num_match_gt': num_match_gt,  # [N', ]
-    #     'anchor_ids_gt': anchor_ids_gt,  # [N', NUM_ANCHOR]
-    #     'non_epipolar': non_epipolar
-    # })
-
     # 5. save coarse matches(gt) for training fine level
     if len(b_ids) == 0:
         logger.warning(f"No groundtruth coarse match found for: {data['pair_names']}")
@@ -132,23 +105,21 @@ def spvs_coarse(data, config):
     })
 
     # 6. prepare gt matches for anchor points padding
-    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)
+    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)  # [N, ]
     cumsum_match_gt = num_match_gt.cumsum(dim=0)
     cumsum_match_gt = torch.cat(
         [
             torch.tensor([0], device=cumsum_match_gt.device, dtype=torch.int32),
             cumsum_match_gt,
         ]
-    )
+    )  # [N + 1, ]
 
-    non_epipolar = num_match_gt < anchor_num
+    non_epipolar = num_match_gt < anchor_num  # [N, ]
     if non_epipolar.sum(dim=0) > 0:
-        non_epipolar_ids = torch.where(~non_epipolar)[0]
+        epipolar_ids = torch.where(~non_epipolar)[0]
     else:
-        non_epipolar_ids = torch.arange(0, N, 1)
+        epipolar_ids = torch.arange(0, N, 1)
 
-    # low = cumsum_match_gt[non_epipolar_ids]
-    # high = cumsum_match_gt[non_epipolar_ids+1]
     sample_index = [
         torch.cat(
             [
@@ -163,9 +134,9 @@ def spvs_coarse(data, config):
             ],
             dim=0,
         )
-        for idx in non_epipolar_ids
+        for idx in epipolar_ids
     ]
-    sample_index = torch.stack(sample_index, dim=0) if len(non_epipolar_ids) > 0 else None  # (N', NUM_ANCHOR)
+    sample_index = torch.stack(sample_index, dim=0) if len(epipolar_ids) > 0 else None  # (N', NUM_ANCHOR)
     if sample_index is not None:
         anchor_i_gt = i_ids[sample_index]  # (N', NUM_ANCHOR)
         anchor_j_gt = j_ids[sample_index]

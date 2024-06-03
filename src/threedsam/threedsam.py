@@ -71,47 +71,9 @@ class ThreeDSAM(nn.Module):
         
         feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, None, mask_c0, mask_c1)
 
-        def get_conf_matrix(feat0, feat1, data):
-            feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
-            feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
-            
-            # normalize
-            feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
-                                   [feat0, feat1])
-            sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
-
-            if mask_c0 is not None:
-                sim_matrix.masked_fill_(
-                    ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
-                    -INF)
-            conf_matrix = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
-
-            data.update({'conf_matrix': conf_matrix})
-
-            return conf_matrix
-
-        def update_conf_matrix(feat0, feat1, weight, pre_conf_matrix, data):
-            feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
-            feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
-
-            feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
-                                   [feat0, feat1])
-            sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
-
-            if mask_c0 is not None:
-                sim_matrix.masked_fill_(
-                    ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
-                    -INF)
-            conf_matrix_cur = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
-
-            conf_matrix = weight * conf_matrix_cur + (1 - weight) * pre_conf_matrix
-
-            data.update({'conf_matrix': conf_matrix})
-
-            return conf_matrix
 
         # 2. initialize confidence matrix
-        conf_matrix = get_conf_matrix(feat_c0, feat_c1, data)
+        conf_matrix = self.get_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
 
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
@@ -125,7 +87,7 @@ class ThreeDSAM(nn.Module):
             # perform optimization
             feat_c0, feat_c1 = self.iterative_optimization(feat_c0, feat_c1, match_mask, n_iter, data)  # [N, C, H, W]
 
-            conf_matrix = update_conf_matrix(feat_c0, feat_c1, self.update_weight[n_iter], conf_matrix, data) 
+            conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, self.update_weight[n_iter], conf_matrix, data) 
 
         # 4. coarse matching
         data.update(**get_coarse_match(conf_matrix, self.config['match_coarse'], self.training, data))
@@ -138,6 +100,45 @@ class ThreeDSAM(nn.Module):
 
         # 6. match fine-level
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
+
+    def get_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
+        feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
+        feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
+        
+        # normalize
+        feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
+                                [feat0, feat1])
+        sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
+
+        if mask_c0 is not None:
+            sim_matrix.masked_fill_(
+                ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
+                -INF)
+        conf_matrix = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
+
+        data.update({'conf_matrix': conf_matrix})
+
+        return conf_matrix
+
+    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, weight, pre_conf_matrix, data):
+        feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
+        feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
+
+        feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
+                                [feat0, feat1])
+        sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
+
+        if mask_c0 is not None:
+            sim_matrix.masked_fill_(
+                ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
+                -INF)
+        conf_matrix_cur = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
+
+        conf_matrix = weight * conf_matrix_cur + (1 - weight) * pre_conf_matrix
+
+        data.update({'conf_matrix': conf_matrix})
+
+        return conf_matrix
 
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):
