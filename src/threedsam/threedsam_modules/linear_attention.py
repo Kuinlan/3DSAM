@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from kornia.utils import create_meshgrid
 from einops.einops import rearrange
 
-from ..utils.geometry import get_epipolar_line_std
+from ..utils.geometry import get_epipolar_line_std, get_scaled_K
 
 
 if hasattr(F, 'scaled_dot_product_attention'):
@@ -143,12 +143,15 @@ class One2ManyAttention(Module):
 
     @torch.no_grad()
     def get_candidate_info(self, epipolar_info):
-        scale = epipolar_info['agg_scale']
+        
+        scale_c = epipolar_info['scale']
+        scale_agg = epipolar_info['agg_scale']  
+        scale_K = scale_c * scale_agg
 
-        H0 = epipolar_info['hw0_c'][0] // scale
-        W0 = epipolar_info['hw0_c'][1] // scale
-        H1 = epipolar_info['hw1_c'][0] // scale
-        W1 = epipolar_info['hw1_c'][1] // scale
+        H0 = epipolar_info['hw0_c'][0] // scale_agg
+        W0 = epipolar_info['hw0_c'][1] // scale_agg
+        H1 = epipolar_info['hw1_c'][0] // scale_agg
+        W1 = epipolar_info['hw1_c'][1] // scale_agg
 
         K0 = epipolar_info['K0'].clone()
         K1 = epipolar_info['K1'].clone()
@@ -161,8 +164,8 @@ class One2ManyAttention(Module):
             H1, W1, False, K1.device
         ).flatten(1, 2)  # [1, L, 2] - <x, y>
 
-        K0 = self.get_scaled_K(K0, scale)
-        K1 = self.get_scaled_K(K1, scale)
+        K0 = get_scaled_K(K0, scale_K)
+        K1 = get_scaled_K(K1, scale_K)
 
         R = epipolar_info['R']
         t = epipolar_info['t']
@@ -254,18 +257,6 @@ class One2ManyAttention(Module):
         valid_mask = indices_output != 0  # [N, L, C]
 
         return indices_output, valid_mask
-
-        
-    @torch.no_grad()
-    def get_scaled_K(self, K: torch.Tensor, scale):
-        if K.dim() == 2:
-            K[:2, :] = K[:2, :] / scale
-        elif K.dim() == 3:
-            K[:, :2, :] = K[:, :2, :] / scale
-        else:
-            raise ValueError("Expected tensor of shape: [N, 3, 3] or [3, 3]")
-
-        return K
 
     def update_mask(self, mask, data):
         NotImplemented

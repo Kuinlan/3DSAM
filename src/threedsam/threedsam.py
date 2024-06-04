@@ -26,7 +26,7 @@ class ThreeDSAM(nn.Module):
         self.fine_matching = FineMatching()
 
         self.iter_num = config['n_iter']
-        self.update_weight = nn.Parameter(torch.tensor([0.8 for _ in range(self.iter_num)]))
+        self.update_weight = nn.Parameter(torch.tensor([0.5 for _ in range(self.iter_num)]))
 
         self.temperature = config['match_coarse']['dsmax_temperature']
 

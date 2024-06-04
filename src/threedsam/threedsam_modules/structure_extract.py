@@ -4,7 +4,7 @@ from kornia.utils import create_meshgrid
 from einops.einops import rearrange
 
 from ..utils.index_padding import anchor_index_padding
-from ..utils.geometry import estimate_pose
+from ..utils.geometry import estimate_pose, get_scaled_K
 
 INF = 1e9
 
@@ -53,15 +53,18 @@ class StructureExtractor(nn.Module):
         
         epipolar_sample = ~data['non_epipolar'] 
 
+        scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
         epipolar_info0 = dict(hw0_c = data['hw0_c'],
                              hw1_c = data['hw1_c'], 
                              K0 = data['K0'][epipolar_sample], 
-                             K1 = data['K1'][epipolar_sample])
+                             K1 = data['K1'][epipolar_sample],
+                             scale = scale)
 
         epipolar_info1 = dict(hw0_c = data['hw1_c'],
                              hw1_c = data['hw0_c'],
                              K0 = data['K1'][epipolar_sample], 
-                             K1 = data['K0'][epipolar_sample])
+                             K1 = data['K0'][epipolar_sample],
+                             scale = scale)
 
         depthmap_scale = data['hw0_i'][0] // data['hw0_c'][0]  # 8
         pts_3d0 = data['pts_3d0'][epipolar_sample] # [N', L', 3], L' = 640 * 480
@@ -81,6 +84,9 @@ class StructureExtractor(nn.Module):
         # 2.estimate relative pose using anchor points
         K0 = data['K0'][epipolar_sample].clone()
         K1 = data['K1'][epipolar_sample].clone()
+        K0 = get_scaled_K(K0, scale)
+        K1 = get_scaled_K(K1, scale)
+
         R, t = estimate_pose(pts_2d0, pts_2d1, K0, K1)
 
         epipolar_info0['R'] = R  # [N, 3, 3]
