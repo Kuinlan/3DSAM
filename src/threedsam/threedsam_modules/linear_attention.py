@@ -7,7 +7,7 @@ import torch
 from torch.nn import Module, Dropout
 from kornia.utils import create_meshgrid
 
-from ..utils.geometry import get_epipolar_line_std
+from ..utils.geometry import get_epipolar_line_std, get_scaled_K
 
 def elu_feature_map(x):
     return torch.nn.functional.elu(x) + 1
@@ -134,8 +134,8 @@ class One2ManyAttention(Module):
             ).flatten(1, 2)  # [1, L, 2] - <x, y>
 
             scale = epipolar_info['scale']
-            K0 = self.get_scaled_K(K0, scale)
-            K1 = self.get_scaled_K(K1, scale)
+            K0 = get_scaled_K(K0, scale)
+            K1 = get_scaled_K(K1, scale)
 
             R = epipolar_info['R'][solved_sample]
             t = epipolar_info['t'][solved_sample]
@@ -274,15 +274,3 @@ class One2ManyAttention(Module):
         mask = indices_output != 0  # [N, L, C]
 
         return indices_output, mask
-
-        
-    @torch.no_grad()
-    def get_scaled_K(self, K: torch.Tensor, scale):
-        if K.dim() == 2:
-            K[:2, :] = K[:2, :] / scale
-        elif K.dim() == 3:
-            K[:, :2, :] = K[:, :2, :] / scale
-        else:
-            raise ValueError("Expected tensor of shape: [N, 3, 3] or [3, 3]")
-
-        return K

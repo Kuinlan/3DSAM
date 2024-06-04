@@ -5,7 +5,7 @@ import cv2
 from kornia.utils import create_meshgrid
 
 from ..utils.index_padding import anchor_index_padding
-from ..utils.geometry import estimate_pose
+from ..utils.geometry import estimate_pose, get_scaled_K
 
 INF = 1e9
 
@@ -93,6 +93,8 @@ class StructureExtractor(nn.Module):
         # 2.estimate relative pose using anchor points
         K0 = data['K0'][~skip_sample].clone()
         K1 = data['K1'][~skip_sample].clone()
+        K0 = get_scaled_K(K0, data['hw0_i'][0] / data['hw0_c_8'][0])
+        K1 = get_scaled_K(K1, data['hw1_i'][0] / data['hw1_c_8'][0])
         R, t = estimate_pose(pts_2d0, pts_2d1, K0, K1)
 
         epipolar_info['solved_sample'] = torch.ones((N, ), dtype=torch.bool, device=_device)

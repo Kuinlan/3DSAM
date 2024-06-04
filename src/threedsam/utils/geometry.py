@@ -14,6 +14,16 @@ from kornia.geometry.epipolar import find_fundamental, decompose_essential_matri
 #     t = torch.from_numpy(t)
 
 #     return R
+@torch.no_grad()
+def get_scaled_K(K: torch.Tensor, scale):
+    if K.dim() == 2:
+        K[:2, :] = K[:2, :] / scale
+    elif K.dim() == 3:
+        K[:, :2, :] = K[:, :2, :] / scale
+    else:
+        raise ValueError("Expected tensor of shape: [N, 3, 3] or [3, 3]")
+
+    return K
 
 def estimate_pose(kpts0: torch.Tensor, kpts1: torch.Tensor, K0: torch.Tensor, K1: torch.Tensor):
     F = find_fundamental(kpts0, kpts1)  # (N, 3, 3) 
