@@ -1,1 +1,1 @@
-A 3D structure-aware matcher under development.
+A 3D structure-aware matcher based on LoFTR under development.
