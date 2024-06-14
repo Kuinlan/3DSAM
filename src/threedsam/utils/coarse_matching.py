@@ -55,6 +55,7 @@ def compute_max_candidates(p_m0, p_m1):
         torch.min(torch.stack([h0s * w0s, h1s * w1s], -1), -1)[0])
     return max_cand
 
+
 def get_match_mask(conf_matrix, thr, border_rm, data):
     axes_lengths = {
         'h0c': data['hw0_c'][0],
@@ -64,7 +65,7 @@ def get_match_mask(conf_matrix, thr, border_rm, data):
     }
 
     # confidence thresholding
-    mask = conf_matrix > thr  # (N', L, L)
+    mask = conf_matrix > thr  # (N, L, S)
     mask = rearrange(mask, 'b (h0c w0c) (h1c w1c) -> b h0c w0c h1c w1c',
                          **axes_lengths)
     if 'mask0' not in data:

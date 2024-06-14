@@ -88,6 +88,35 @@ def spvs_coarse(data, config):
     j_ids = nearest_index1[b_ids, i_ids]
 
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
+
+    # assume at least one sample has enouge gt correspondence for anchor point padding
+    match_num_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)  # [N, ]
+    enough_gt = match_num_gt >= anchor_num  # [N, ]
+
+    assert enough_gt.sum() > 0
+
+    not_enough_ids = torch.where(~enough_gt)[0]
+    enough_ids = torch.where(enough_gt)[0]
+    
+    # copy data and ground truth
+    if enough_gt.sum() < N:
+        sample = torch.randint(low=0, high=enough_gt.sum(), size=(N-enough_gt.sum(), ), dtype=torch.int64, device=device)
+        copy_ids = enough_ids[sample]
+
+        conf_matrix_gt[not_enough_ids] = conf_matrix_gt[copy_ids]
+        for k in data.keys():
+            data[k][not_enough_ids] = data[k][copy_ids]
+
+        b_ids, i_ids, j_ids = torch.split(b_ids, match_num_gt.tolist()), torch.split(i_ids, match_num_gt.tolist()), torch.split(j_ids, match_num_gt.tolist())
+        b_ids[not_enough_ids] = b_ids[copy_ids]
+        i_ids[not_enough_ids] = i_ids[copy_ids]
+        j_ids[not_enough_ids] = j_ids[copy_ids]
+
+        b_ids, i_ids, j_ids = torch.cat(b_ids), torch.cat(i_ids), torch.cat(j_ids)
+
+        w_pt0_i[not_enough_ids] = w_pt0_i[copy_ids]
+        grid_pt1_i[not_enough_ids] = grid_pt1_i[copy_ids]
+
     data.update({'conf_matrix_gt': conf_matrix_gt})
 
     # 5. save coarse matches(gt) for training fine level
@@ -105,8 +134,8 @@ def spvs_coarse(data, config):
     })
 
     # 6. prepare gt matches for anchor points padding
-    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)  # [N, ]
-    cumsum_match_gt = num_match_gt.cumsum(dim=0)
+    match_num_gt = conf_matrix_gt.sum(dim=(1, 2)).to(torch.int32)
+    cumsum_match_gt = match_num_gt.cumsum(dim=0)
     cumsum_match_gt = torch.cat(
         [
             torch.tensor([0], device=cumsum_match_gt.device, dtype=torch.int32),
@@ -114,38 +143,12 @@ def spvs_coarse(data, config):
         ]
     )  # [N + 1, ]
 
-    non_epipolar = num_match_gt < anchor_num  # [N, ]
-    if non_epipolar.sum(dim=0) > 0:
-        epipolar_ids = torch.where(~non_epipolar)[0]
-    else:
-        epipolar_ids = torch.arange(0, N, 1)
-
-    sample_index = [
-        torch.cat(
-            [
-                (torch.randperm(num_match_gt[idx], device=device) + cumsum_match_gt[idx])[:train_pad_anchor_num_min],
-                torch.randint(
-                    cumsum_match_gt[idx],
-                    cumsum_match_gt[idx+1],
-                    (anchor_num - train_pad_anchor_num_min,),
-                    dtype=torch.int64,
-                    device=device,
-                ),
-            ],
-            dim=0,
-        )
-        for idx in epipolar_ids
-    ]
-    sample_index = torch.stack(sample_index, dim=0) if len(epipolar_ids) > 0 else None  # (N', NUM_ANCHOR)
-    if sample_index is not None:
-        anchor_i_gt = i_ids[sample_index]  # (N', NUM_ANCHOR)
-        anchor_j_gt = j_ids[sample_index]
-    else:
-        anchor_i_gt = None
-        anchor_j_gt = None
+    sample_index = [torch.randperm(anchor_num, device=device)+cumsum_match_gt[n] for n in range(N)]
+    sample_index = torch.stack(sample_index, dim=0)
+    anchor_i_gt = i_ids[sample_index]  # (N, NUM_ANCHOR)
+    anchor_j_gt = j_ids[sample_index]
 
     data.update({
-        'non_epipolar': non_epipolar,
         'anchor_i_gt': anchor_i_gt,
         'anchor_j_gt': anchor_j_gt
     })

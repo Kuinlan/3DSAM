@@ -19,14 +19,13 @@ class ThreeDSAM(nn.Module):
 
         # Modules
         self.backbone = build_backbone(config)
-        self.init_attention = LocalFeatureTransformer(config['coarse'])
+        self.init_attention = LocalFeatureTransformer(config['coarse_init'])
         self.iterative_optimization = IterativeOptimization(config)
         self.fine_preprocess = FinePreprocess(config)
         self.threedsam_fine = LocalFeatureTransformer(config["fine"])
         self.fine_matching = FineMatching()
 
         self.iter_num = config['n_iter']
-        self.update_weight = nn.Parameter(torch.tensor([0.5 for _ in range(self.iter_num)]))
 
         self.temperature = config['match_coarse']['dsmax_temperature']
 
@@ -64,30 +63,23 @@ class ThreeDSAM(nn.Module):
             'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
         })
 
-        # 2. init attention and matching
+        # 2. init attention with RoPE
         mask_c0, mask_c1 = None, None
         if 'mask0' in data:
             mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
         
-        feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, None, mask_c0, mask_c1)
-
-
-        # 2. initialize confidence matrix
-        conf_matrix = self.get_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
+        feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, mask_c0, mask_c1)
+        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
 
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
             match_mask = get_match_mask(conf_matrix, self.thr, self.border_rm, data)  # (N', L, L)
             data.update({'match_mask': match_mask})
 
-            if not self.training:
-                anchor_num = match_mask.sum(dim=(1, 2))
-                data['non_epipolar'] = anchor_num < self.anchor_num_min
-
             # perform optimization
             feat_c0, feat_c1 = self.iterative_optimization(feat_c0, feat_c1, match_mask, n_iter, data)  # [N, C, H, W]
 
-            conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, self.update_weight[n_iter], conf_matrix, data) 
+            conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data) 
 
         # 4. coarse matching
         data.update(**get_coarse_match(conf_matrix, self.config['match_coarse'], self.training, data))
@@ -101,45 +93,31 @@ class ThreeDSAM(nn.Module):
         # 6. match fine-level
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
-    def get_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
+    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
         feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
         feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
+
+        feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
+                                [feat0, feat1])
+        sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
+
+        if mask_c0 is not None:
+            sim_matrix.masked_fill_(
+                ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
+                -INF)
         
-        # normalize
-        feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
-                                [feat0, feat1])
-        sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
+        if 'update_mask0' in data and data['update_mask0'] is not None:
+            update_mask0, update_mask1 = data['update_mask0'], data['update_mask1']  # [N, L, S], [N, S, L]
+            sim_matrix.masked_fill_(~(update_mask0 * update_mask1.transpose(1, 2).bool()), -INF) 
 
-        if mask_c0 is not None:
-            sim_matrix.masked_fill_(
-                ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
-                -INF)
         conf_matrix = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
+        conf_matrix = conf_matrix.nan_to_num_(nan=0)
 
         data.update({'conf_matrix': conf_matrix})
 
         return conf_matrix
 
-    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, weight, pre_conf_matrix, data):
-        feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
-        feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
-
-        feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
-                                [feat0, feat1])
-        sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
-
-        if mask_c0 is not None:
-            sim_matrix.masked_fill_(
-                ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
-                -INF)
-        conf_matrix_cur = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
-
-        conf_matrix = weight * conf_matrix_cur + (1 - weight) * pre_conf_matrix
-
-        data.update({'conf_matrix': conf_matrix})
-
-        return conf_matrix
-
+    # def get_pose(self, ):
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):
             if k.startswith('matcher.'):

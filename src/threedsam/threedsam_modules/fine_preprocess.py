@@ -12,7 +12,7 @@ class FinePreprocess(nn.Module):
         self.cat_c_feat = config['fine_concat_coarse_feat']
         self.W = self.config['fine_window_size']
 
-        d_model_c = self.config['coarse']['d_model']
+        d_model_c = self.config['coarse_init']['d_model']
         d_model_f = self.config['fine']['d_model']
         self.d_model_f = d_model_f
         if self.cat_c_feat:
