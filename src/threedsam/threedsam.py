@@ -117,7 +117,6 @@ class ThreeDSAM(nn.Module):
 
         return conf_matrix
 
-    # def get_pose(self, ):
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):
             if k.startswith('matcher.'):

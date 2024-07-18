@@ -1,4 +1,3 @@
-
 from collections import defaultdict
 import pprint
 from loguru import logger
@@ -9,7 +8,8 @@ import numpy as np
 import pytorch_lightning as pl
 from matplotlib import pyplot as plt
 
-from src.dpt import init_dpt
+from src.da.depth_anything_v2.depth_anything_v2.dpt import DepthAnythingV2
+
 from src.threedsam import ThreeDSAM
 from src.threedsam.utils.geometry import get_point_cloud
 from src.threedsam.utils.supervision import compute_supervision_coarse, compute_supervision_fine
@@ -26,7 +26,6 @@ from src.utils.comm import gather, all_gather
 from src.utils.misc import lower_config, flattenList
 from src.utils.profiler import PassThroughProfiler
 
-
 class PL_3DSAM(pl.LightningModule):
     def __init__(self, config, pretrained_ckpt=None, profiler=None, dump_dir=None):
         """
@@ -41,8 +40,10 @@ class PL_3DSAM(pl.LightningModule):
         self.profiler = profiler or PassThroughProfiler()
         self.n_vals_plot = max(config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1)
 
-        # DPT
-        self.dpt = init_dpt(self.config['DPT']['WEIGHT_PATH'], frozen=True)
+        # Depth Anything v2 initialization
+        self.depth_anything = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
+        self.depth_anything.load_state_dict(torch.load('./src/da/depth_anything_v2/weights/depth_anything_v2_vits.pth', map_location='cpu'))
+        self.depth_anything.eval()
 
         # Matcher: ThreeDSAM
         self.matcher = ThreeDSAM(config=_config['threedsam'])
@@ -122,16 +123,17 @@ class PL_3DSAM(pl.LightningModule):
     def _update_point_cloud(self, batch):
         input0 = batch['image_color0']  # (N, h, w, 3)
         input1 = batch['image_color1']
+
+        img_size = batch['image0'].shape[-2:]
+
         K0 = batch['K0']  # (N, 3, 3)
         K1 = batch['K1']
 
-        prediction0 = self.dpt.forward(input0)  # (N, h, w)
-        prediction1 = self.dpt.forward(input1)  # (N, h, w)
+        prediction0 = self.depth_anything.infer_to_model(input0, img_size, downsample=8)  # (1, N, h, w)
+        prediction1 = self.depth_anything.infer_to_model(input1, img_size, downsample=8)  # (1, N, h, w)
             
-        prediction0 = prediction0 * 1000.0
-        prediction1 = prediction1 * 1000.0
-        pts_3d0 = get_point_cloud(prediction0, K0)
-        pts_3d1 = get_point_cloud(prediction1, K1)
+        pts_3d0 = get_point_cloud(prediction0.squeeze(dim=1), K0)
+        pts_3d1 = get_point_cloud(prediction1.squeeze(dim=1), K1)
 
         batch.update({
             'pts_3d0': pts_3d0,

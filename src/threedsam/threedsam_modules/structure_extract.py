@@ -28,7 +28,6 @@ class StructureExtractor(nn.Module):
         super().__init__()
         self.train_anchor_num = config['anchor_num']    # 32
         self.train_anchor_thr = config['anchor_thr']    # 0.5
-        self.pad_num_min = config['train_pad_anchor_num_min']  # 8
         self.border_rm = config['border_rm']    # 2
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
@@ -64,9 +63,8 @@ class StructureExtractor(nn.Module):
                              K1 = data['K0'],
                              scale = scale)
 
-        depthmap_scale = data['hw0_i'][0] // data['hw0_c'][0]  # 8
-        pts_3d0 = data['pts_3d0']
-        pts_3d1 = data['pts_3d1']
+        pts_3d0 = data['pts_3d0']  # [N, L, 3]
+        pts_3d1 = data['pts_3d1'] 
         
         # 1.anchor index padding 
         anchor_i_ids, anchor_j_ids = anchor_index_padding(data, match_mask, 
@@ -100,14 +98,8 @@ class StructureExtractor(nn.Module):
         anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
         anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
 
-        grid_c = create_meshgrid(data['hw0_c'][0], data['hw0_c'][1], False, pts_3d0.device, torch.int64)
-        grid_c = (grid_c * depthmap_scale).reshape(-1, 2)  # [L, 2] 
-        ids_c = data['hw0_c'][1] * grid_c[:, 1] + grid_c[:, 0]  # [L, ]
-        pts_3d0_c = pts_3d0[:, ids_c, :]  # [N, L, 3]
-        pts_3d1_c = pts_3d1[:, ids_c, :]
-        
-        m_struct0 = pts_3d0_c.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
-        m_struct1 = pts_3d1_c.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
+        m_struct0 = pts_3d0.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
+        m_struct1 = pts_3d1.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
 
         distance0 = m_struct0.square().sum(dim=-1, keepdim=True).sqrt()  # [N, L, ANCHOR_NUM, 1]
         distance1 = m_struct1.square().sum(dim=-1, keepdim=True).sqrt()  

@@ -44,7 +44,6 @@ def spvs_coarse(data, config):
     scale1 = scale * data['scale1'][:, None] if 'scale1' in data else scale
     h0, w0, h1, w1 = map(lambda x: x // scale, [H0, W0, H1, W1])
     anchor_num = config['THREEDSAM']['EXTRACTOR']['ANCHOR_NUM'] 
-    train_pad_anchor_num_min = config['THREEDSAM']['EXTRACTOR']['TRAIN_PAD_ANCHOR_NUM_MIN'] 
 
     # 2. warp grids
     # create kpts in meshgrid and resize them to image resolution
