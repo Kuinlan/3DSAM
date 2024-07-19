@@ -168,8 +168,8 @@ def read_scannet(path, resize=(640, 480), augment_fn=None):
     """
     # read and resize image
     image_grey = imread_gray(path, augment_fn)
-    image_color = cv2.imread(path, cv2.IMREAD_COLOR)
-    image_color = cv2.cvtColor(image_color, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
+    image_raw = cv2.imread(path, cv2.IMREAD_COLOR)
+    image_color = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
 
     image_grey = cv2.resize(image_grey, resize)
     image_color = cv2.resize(image_color, resize)

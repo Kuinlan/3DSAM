@@ -8,6 +8,7 @@ import torch.utils as utils
 import cv2
 from numpy.linalg import inv
 
+from src.da.depth_anything_v2.depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet
 from src.utils.dataset import (
     read_scannet,
     read_scannet_gray,
@@ -15,7 +16,6 @@ from src.utils.dataset import (
     read_scannet_pose,
     read_scannet_intrinsic
 )
-from src.dpt.transforms import Resize, NormalizeImage, PrepareForNet
 from torchvision.transforms import Compose
 
 class ScanNetDataset(utils.data.Dataset):
@@ -54,14 +54,6 @@ class ScanNetDataset(utils.data.Dataset):
         # for training LoFTR
         self.augment_fn = augment_fn if mode == 'train' else None
 
-        # preprocess for DPT prediction
-        self.transform = Compose(
-            [
-                NormalizeImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-                PrepareForNet(),
-            ]
-        )
-
     def __len__(self):
         return len(self.data_names)
 
@@ -76,6 +68,29 @@ class ScanNetDataset(utils.data.Dataset):
         pose1 = self._read_abs_pose(scene_name, name1)
         
         return np.matmul(pose1, inv(pose0))  # (4, 4)
+
+    # preprocess for depth anything inference
+    def image2tensor(self, image, input_size=518):        
+        transform = Compose([
+            Resize(
+                width=input_size,
+                height=input_size,
+                resize_target=False,
+                keep_aspect_ratio=True,
+                ensure_multiple_of=14,
+                resize_method='lower_bound',
+                image_interpolation_method=cv2.INTER_CUBIC,
+            ),
+            NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            PrepareForNet(),
+        ])
+        
+        h, w = image.shape[:2]
+        
+        image = transform({'image': image})['image']
+        image = torch.from_numpy(image)
+        
+        return image, (h, w)
 
     def __getitem__(self, idx):
         data_name = self.data_names[idx]
@@ -92,22 +107,14 @@ class ScanNetDataset(utils.data.Dataset):
         # image1 = read_scannet_gray(img_name1, resize=(640, 480), augment_fn=None)
         #                         #    augment_fn=np.random.choice([self.augment_fn, None], p=[0.5, 0.5]))
         
-        # grey for 3DSAM and color for dpt
+        # grey for 3DSAM
         image_grey0, image_color0 = read_scannet(img_name0, resize=(640, 480), augment_fn=None) 
         image_grey1, image_color1 = read_scannet(img_name1, resize=(640, 480), augment_fn=None) 
 
-        image_color0 = self.transform({"image": image_color0})["image"]  # [H, W, 3]
-        image_color1 = self.transform({"image": image_color1})["image"]
+        # color for depth anything
+        image_color0, (h0, w0) = self.image2tensor(image_color0) 
+        image_color1, (h1, w1) = self.image2tensor(image_color1) 
 
-        image_color0 = torch.from_numpy(image_color0).unsqueeze(dim=0) # [1, H, W, 3]
-        image_color1 = torch.from_numpy(image_color1).unsqueeze(dim=0)
-
-        image_color0 = image_color0.to(memory_format=torch.channels_last).squeeze()
-        image_color1 = image_color1.to(memory_format=torch.channels_last).squeeze()
-
-        image_color0 = image_color0.half()
-        image_color1 = image_color1.half()
-        
         # read the depthmap which is stored as (480, 640)
         if self.mode in ['train', 'val']:
             depth0 = read_scannet_depth(osp.join(self.root_dir, scene_name, 'depth', f'{stem_name_0}.png'))
@@ -122,32 +129,6 @@ class ScanNetDataset(utils.data.Dataset):
         T_0to1 = torch.tensor(self._compute_rel_pose(scene_name, stem_name_0, stem_name_1),
                               dtype=torch.float32)
         T_1to0 = T_0to1.inverse()
-
-        # # predict depth using DPT
-        # img_color0 = read_image(img_name0)  # [3, H, W]
-        # img_color1 = read_image(img_name1)
-        # img_input0 = self.transform({"image": img_color0})["image"]  # [H, W, 3]
-        # img_input1 = self.transform({"image": img_color1})["image"]
-
-        # with torch.no_grad():
-        #     sample0 = torch.from_numpy(img_input0).to(self.device).unsqueeze(0)  # [1, H, W, 3]
-        #     sample1 = torch.from_numpy(img_input1).to(self.device).unsqueeze(0)
-        #     if self.optimize and self.device == torch.device("cuda"):
-        #         sample0 = sample0.to(memory_format=torch.channels_last)
-        #         sample1 = sample1.to(memory_format=torch.channels_last)
-        #         sample0 = sample0.half()
-        #         sample1 = sample1.half()
-
-        #     prediction0 = self.dpt.forward(sample0).squeeze(0)    # (1, h, w) -> (h, w)
-        #     prediction1 = self.dpt.forward(sample1).squeeze(0)
-            
-        #     prediction0 *= 1000.0
-        #     prediction1 *= 1000.0 
-
-        # # get 3d point cloud
-        # pts_3d0 = get_point_cloud(prediction0, K_0)    # (h * w, 3)
-        # pts_3d1 = get_point_cloud(prediction1, K_1)
-
         data = {
             'image_color0': image_color0,  # (h, w, 3)
             'image_color1': image_color1,
@@ -155,8 +136,6 @@ class ScanNetDataset(utils.data.Dataset):
             'depth0': depth0,   # (h, w)
             'image1': image_grey1,
             'depth1': depth1,
-            # 'pts_3d0': pts_3d0,    # (h * w, 3)
-            # 'pts_3d1': pts_3d1,  
             'T_0to1': T_0to1,   # (4, 4)
             'T_1to0': T_1to0,
             'K0': K_0,  # (3, 3)

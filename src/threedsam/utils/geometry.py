@@ -57,6 +57,7 @@ def get_point_cloud(depth, K, scale = 1):
      
     # Unproject
     grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, :, [0]])], dim=-1) * kpts_depth[..., None]  # (N, h * w, 3)
+    
     # (K.inv() @ P.T).T = P @ k.inv().T
     pts_3d = grid_pt_h @ K.inverse().transpose(1, 2)  # (N, L, 3)
     

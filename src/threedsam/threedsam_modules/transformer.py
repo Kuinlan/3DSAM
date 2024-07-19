@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from einops.einops import rearrange
 
-from .linear_attention import Attention, One2ManyAttention
+from .linear_attention import Attention
 from ..utils.position_encoding import RoPEPositionEncodingSine
 
 
@@ -17,7 +17,6 @@ class AG_RoPE_EncoderLayer(nn.Module):
                  rope=False,
                  npe=None,
                  fp32=False,
-                 area_width=4,
                  ):
         super(AG_RoPE_EncoderLayer, self).__init__()
 
@@ -25,7 +24,6 @@ class AG_RoPE_EncoderLayer(nn.Module):
         self.nhead = nhead
         self.agg_size0, self.agg_size1 = agg_size0, agg_size1
         self.rope = rope
-        self.area_width = area_width 
 
         # aggregate and position encoding
         self.aggregate = nn.Conv2d(d_model, d_model, kernel_size=agg_size0, padding=0, stride=agg_size0, bias=False, groups=d_model) if self.agg_size0 != 1 else nn.Identity()
@@ -37,7 +35,6 @@ class AG_RoPE_EncoderLayer(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)        
 
-        self.epipolar_attention = One2ManyAttention(self.nhead, self.dim, area_width)
         self.attention = Attention(no_flash, self.nhead, self.dim, fp32)
 
         self.merge = nn.Linear(d_model, d_model, bias=False)
@@ -53,7 +50,7 @@ class AG_RoPE_EncoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
-    def forward(self, x, source, x_mask=None, source_mask=None, epi_info=None, data=None):
+    def forward(self, x, source, x_mask=None, source_mask=None, data=None):
         """
         Args:
             x (torch.Tensor): [N, C, H0, W0]
@@ -77,11 +74,7 @@ class AG_RoPE_EncoderLayer(nn.Module):
             key = self.rope_pos_enc(key)
 
         # multi-head attention handle padding mask
-        if epi_info is not None:
-            epi_info['agg_scale'] = self.agg_size0
-            m = self.epipolar_attention(query, key, value, epi_info, data, q_mask=x_mask, kv_mask=source_mask)
-        else:
-            m = self.attention(query, key, value, q_mask=x_mask, kv_mask=source_mask)
+        m = self.attention(query, key, value, q_mask=x_mask, kv_mask=source_mask)
 
         m = self.merge(m.reshape(bs, -1, self.nhead*self.dim)) # [N, L, C]
 
@@ -109,14 +102,10 @@ class LocalFeatureTransformer(nn.Module):
         self.agg_size0, self.agg_size1 = config['agg_size0'], config['agg_size1']
         self.rope = config['rope']
 
-        area_width = config.get('area_width', None)
-
-        if 'self' in self.layer_names:
-            self_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
+        self_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
                                             config['no_flash'], config['rope'], config['npe'], self.fp32)
-        if 'cross' in self.layer_names:
-            cross_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
-                                            config['no_flash'], False, config['npe'], self.fp32, area_width)
+        cross_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
+                                            config['no_flash'], False, config['npe'], self.fp32)
         self.layers = nn.ModuleList([copy.deepcopy(self_layer) if _ == 'self' \
                                      else copy.deepcopy(cross_layer) for _ in self.layer_names])
         self._reset_parameters()
@@ -126,7 +115,7 @@ class LocalFeatureTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, feat0, feat1, mask0=None, mask1=None, data=None, epipolar_sample=None, epi_info0=None, epi_info1=None):
+    def forward(self, feat0, feat1, mask0=None, mask1=None, data=None):
         """
         Args:
             feat0 (torch.Tensor): [N, C, H, W]
@@ -151,25 +140,13 @@ class LocalFeatureTransformer(nn.Module):
                 mask0, mask1 = None, None
 
             if name == 'self':
-                feat0_all = layer(feat0, feat0, mask0, mask0)
-                feat1_all = layer(feat1, feat1, mask1, mask1)
+                feat0 = layer(feat0, feat0, mask0, mask0)
+                feat1 = layer(feat1, feat1, mask1, mask1)
             elif name == 'cross':
-                feat0_all, feat1_all = torch.empty_like(feat0), torch.empty_like(feat1)
-
-                if epipolar_sample is None:
-                    epipolar_sample = torch.zeros((bs, ), dtype=torch.bool, device=feat0.device) 
-
-                if epipolar_sample.sum() > 0:
-                    feat0_all[epipolar_sample] = layer(feat0[epipolar_sample], feat1[epipolar_sample], mask0, mask1, epi_info0, data)
-                    feat1_all[epipolar_sample] = layer(feat1[epipolar_sample], feat0[epipolar_sample], mask1, mask0, epi_info1, data)
-                
-                if epipolar_sample.sum() < bs:
-                    feat0_all[~epipolar_sample] = layer(feat0[~epipolar_sample], feat1[~epipolar_sample], mask0, mask1)
-                    feat1_all[~epipolar_sample] = layer(feat1[~epipolar_sample], feat0[~epipolar_sample], mask1, mask0)
+                feat0 = layer(feat0, feat1, mask0, mask1)
+                feat1 = layer(feat1, feat0, mask1, mask0)
             else:
                 raise KeyError
-
-            feat0, feat1 = feat0_all, feat1_all
 
         if feature_cropped:
             # padding feature
