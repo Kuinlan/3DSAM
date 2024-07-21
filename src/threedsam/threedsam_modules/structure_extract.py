@@ -3,7 +3,7 @@ import torch.nn as nn
 from kornia.utils import create_meshgrid
 from einops.einops import rearrange
 
-from ..utils.index_padding import anchor_index_padding, anchor_padding_topK
+from ..utils.anchor_sample import get_anchor, anchor_padding_topK
 from ..utils.geometry import estimate_pose, get_scaled_K
 
 INF = 1e9
@@ -17,7 +17,7 @@ def l1_norm(tensor: torch.Tensor, dim: int):
         dim (int)
     """
     norm = tensor.norm(p=1, dim=dim, keepdim=True) 
-    normed = tensor / norm
+    normed = tensor / (norm + 1e-6)
 
     return normed
 
@@ -50,6 +50,7 @@ class StructureExtractor(nn.Module):
         """
         N, L, S = match_mask.shape
         
+        conf_matrix = data['conf_matrix']
         scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
         epipolar_info0 = dict(hw0_c = data['hw0_c'],
                              hw1_c = data['hw1_c'], 
@@ -66,24 +67,18 @@ class StructureExtractor(nn.Module):
         pts_3d0 = data['pts_3d0']  # [N, L, 3]
         pts_3d1 = data['pts_3d1'] 
         
-        # 1.anchor index padding 
-        anchor_i_ids, anchor_j_ids = anchor_index_padding(data, match_mask, 
-                                                          self.train_anchor_num, 
-                                                          self.training)  # [N, ANCHOR_NUM]
-                                                    
-        pts_2d0 = torch.stack([anchor_i_ids % data['hw0_c'][1], 
-                                anchor_i_ids // data['hw0_c'][1]], dim=-1).to(torch.float32)  # [N', ANCHOR_NUM, 2]
-        pts_2d1 = torch.stack([anchor_j_ids % data['hw1_c'][1], 
-                                anchor_j_ids // data['hw1_c'][1]], dim=-1).to(torch.float32)
+        # 1. get coarse match result
+        mask_v, all_j_ids = match_mask.max(dim=2)
+        b_ids, i_ids = torch.where(mask_v)
+        j_ids = all_j_ids[b_ids, i_ids]
+        mconf = conf_matrix[b_ids, i_ids, j_ids]
+
+        # 2. get anchor points and estimate relative pose   
+        anchor_i_ids, anchor_j_ids, R, t = get_anchor(
+            b_ids, i_ids, j_ids, mconf, N, 
+            self.train_anchor_num, self.training, data
+        )  # [N, ANCHOR_NUM, 2]
         
-        # 2.estimate relative pose using anchor points
-        K0 = data['K0'].clone()
-        K1 = data['K1'].clone()
-        K0 = get_scaled_K(K0, scale)
-        K1 = get_scaled_K(K1, scale)
-
-        R, t = estimate_pose(pts_2d0, pts_2d1, K0, K1)
-
         epipolar_info0['R'] = R  # [N, 3, 3]
         epipolar_info0['t'] = t  # [N, 3, 1]
 
@@ -93,7 +88,7 @@ class StructureExtractor(nn.Module):
         data.update(epipolar_info0 = epipolar_info0,
                     epipolar_info1 = epipolar_info1)
 
-        # 2. compute 3D relative position to anchor points
+        # 3. compute 3D relative position to anchor points
         pts_3d0 = (R @ pts_3d0.transpose(1, 2) + t).transpose(1, 2)  # align point cloud
         anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
         anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
@@ -107,8 +102,10 @@ class StructureExtractor(nn.Module):
         m_struct0 = l1_norm(torch.cat([m_struct0, distance0], dim=-1), dim=2) # [N, L, ANCHOR_NUM, 4]
         m_struct1 = l1_norm(torch.cat([m_struct1, distance1], dim=-1), dim=2) 
 
-        m_struct0 = rearrange(m_struct0, 'n (h w) c d -> n (d c) h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
-        m_struct1 = rearrange(m_struct1, 'n (h w) c d -> n (d c) h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
+        m_struct0 = rearrange(m_struct0, 'n (h w) c d -> n (d c) h w', 
+                              h=data['hw0_c'][0], w=data['hw0_c'][1])
+        m_struct1 = rearrange(m_struct1, 'n (h w) c d -> n (d c) h w', 
+                              h=data['hw1_c'][0], w=data['hw1_c'][1])
 
         return m_struct0, m_struct1
 

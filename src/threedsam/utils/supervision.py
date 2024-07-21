@@ -88,33 +88,31 @@ def spvs_coarse(data, config):
 
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
 
-    # assume at least one sample has enouge gt correspondence for anchor point padding
-    match_num_gt = torch.sum(conf_matrix_gt, dim=(1, 2)).to(torch.int32)  # [N, ]
-    enough_gt = match_num_gt >= anchor_num  # [N, ]
+    match_num_gt = torch.sum(conf_matrix_gt.to(torch.int32), dim=(1, 2))
+    has_gt = match_num_gt > 0
+    if N > 1:  # when training
+        assert has_gt.sum() > 0
 
-    assert enough_gt.sum() > 0
+    # copy data and ground truth when training
+    if N > 1 and has_gt.sum() < N:
+        no_gt_ids = torch.where(~has_gt)[0]
+        has_gt_ids = torch.where(has_gt)[0]
+        sample = torch.randint(low=0, high=has_gt.sum(), size=(N-has_gt.sum(), ), dtype=torch.int64, device=device)
+        copy_ids = has_gt_ids[sample]
 
-    not_enough_ids = torch.where(~enough_gt)[0]
-    enough_ids = torch.where(enough_gt)[0]
-    
-    # copy data and ground truth
-    if enough_gt.sum() < N:
-        sample = torch.randint(low=0, high=enough_gt.sum(), size=(N-enough_gt.sum(), ), dtype=torch.int64, device=device)
-        copy_ids = enough_ids[sample]
-
-        conf_matrix_gt[not_enough_ids] = conf_matrix_gt[copy_ids]
+        conf_matrix_gt[no_gt_ids] = conf_matrix_gt[copy_ids]
         for k in data.keys():
-            data[k][not_enough_ids] = data[k][copy_ids]
+            data[k][no_gt_ids] = data[k][copy_ids]
 
         b_ids, i_ids, j_ids = torch.split(b_ids, match_num_gt.tolist()), torch.split(i_ids, match_num_gt.tolist()), torch.split(j_ids, match_num_gt.tolist())
-        b_ids[not_enough_ids] = b_ids[copy_ids]
-        i_ids[not_enough_ids] = i_ids[copy_ids]
-        j_ids[not_enough_ids] = j_ids[copy_ids]
+        b_ids[no_gt_ids] = b_ids[copy_ids]
+        i_ids[no_gt_ids] = i_ids[copy_ids]
+        j_ids[no_gt_ids] = j_ids[copy_ids]
 
         b_ids, i_ids, j_ids = torch.cat(b_ids), torch.cat(i_ids), torch.cat(j_ids)
 
-        w_pt0_i[not_enough_ids] = w_pt0_i[copy_ids]
-        grid_pt1_i[not_enough_ids] = grid_pt1_i[copy_ids]
+        w_pt0_i[no_gt_ids] = w_pt0_i[copy_ids]
+        grid_pt1_i[no_gt_ids] = grid_pt1_i[copy_ids]
 
     data.update({'conf_matrix_gt': conf_matrix_gt})
 
@@ -132,7 +130,7 @@ def spvs_coarse(data, config):
         'spv_j_ids': j_ids
     })
 
-    # 6. prepare gt matches for anchor points padding
+    # 6. prepare backup gt matches for case where there is no predicted anchor point 
     match_num_gt = conf_matrix_gt.sum(dim=(1, 2)).to(torch.int32)
     cumsum_match_gt = match_num_gt.cumsum(dim=0)
     cumsum_match_gt = torch.cat(
@@ -142,12 +140,19 @@ def spvs_coarse(data, config):
         ]
     )  # [N + 1, ]
 
-    sample_index = [torch.randperm(anchor_num, device=device)+cumsum_match_gt[n] for n in range(N)]
-    sample_index = torch.stack(sample_index, dim=0)
-    anchor_i_gt = i_ids[sample_index]  # (N, NUM_ANCHOR)
-    anchor_j_gt = j_ids[sample_index]
+    anchor_i_gt = torch.zeros((N, anchor_num), device=device)
+    anchor_j_gt = torch.zeros((N, anchor_num), device=device)
+    for n in range(N):
+        if match_num_gt[n] >= anchor_num:
+            sample = torch.randperm(match_num_gt[n], device=device)[:anchor_num]+cumsum_match_gt[n]
+        else:
+            sample = torch.randint(low=cumsum_match_gt[n], high=cumsum_match_gt[n+1], size=(anchor_num, ), device=device)
+
+        anchor_i_gt[n] = i_ids[sample]
+        anchor_j_gt[n] = j_ids[sample]
 
     data.update({
+        'match_num_gt': match_num_gt,
         'anchor_i_gt': anchor_i_gt,
         'anchor_j_gt': anchor_j_gt
     })

@@ -27,8 +27,8 @@ def get_scaled_K(K: torch.Tensor, scale):
     return K
 
 @torch.no_grad()
-def estimate_pose(kpts0: torch.Tensor, kpts1: torch.Tensor, K0: torch.Tensor, K1: torch.Tensor):
-    F = find_fundamental(kpts0, kpts1)  # (N, 3, 3) 
+def estimate_pose(kpts0: torch.Tensor, kpts1: torch.Tensor, K0, K1, weights=None):
+    F = find_fundamental(kpts0, kpts1, weights=weights)  # (N, 3, 3) 
     E = K1.transpose(1, 2) @ F @ K0  
     R, _, t = decompose_essential_matrix(E)
     return R, t

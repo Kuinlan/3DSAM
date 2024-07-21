@@ -74,7 +74,14 @@ class ThreeDSAM(nn.Module):
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
             match_mask = get_match_mask(conf_matrix, self.thr, self.border_rm, data)  # (N', L, L)
-            data.update({'match_mask': match_mask})
+            match_num = match_mask.sum(dim=(1, 2)).to(torch.int32)
+            
+            # save each iteration's coarse matching result
+            data.update({f'match_mask_{n_iter}': match_mask})
+                
+            # quit iterative optimization
+            if not self.training and match_num[0] == 0:
+                break
 
             # perform optimization
             feat_c0, feat_c1 = self.iterative_optimization(feat_c0, feat_c1, match_mask, n_iter, data)  # [N, C, H, W]
@@ -93,7 +100,7 @@ class ThreeDSAM(nn.Module):
         # 6. match fine-level
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
-    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
+    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data, key='conf_matrix'):
         feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
         feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
 
@@ -113,7 +120,9 @@ class ThreeDSAM(nn.Module):
         conf_matrix = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
         conf_matrix = conf_matrix.nan_to_num_(nan=0)
 
-        data.update({'conf_matrix': conf_matrix})
+        data.update({key: conf_matrix})
+        if key != 'conf_matrix':
+            data.update({'conf_matrix': conf_matrix})
 
         return conf_matrix
 
