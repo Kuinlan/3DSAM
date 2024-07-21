@@ -36,32 +36,20 @@ class IterativeOptimization(nn.Module):
         self.norm = nn.LayerNorm(self.d_model)
         
     def forward(self, feat_c0, feat_c1, match_mask, n_iter, data):
-        if not self.training:
-            sample_structure = match_mask.sum(dim=(1, 2)) >= self.anchor_num_min
-        else:
-            sample_structure = torch.ones((feat_c0.shape[0], ), dtype=torch.bool, device=feat_c0.device)
         layer_idx = self.layer_assign[n_iter]
 
-        # 3D structure information extraction & relative pose estimation
-        feat_structured0, feat_structured1 = torch.empty_like(feat_c0), torch.empty_like(feat_c1)  # [N, C, H, W]
-
         data['epipolar_info0'], data['epipolar_info1'] = None, None
-        if sample_structure.sum() > 0:
-            m_struct0, m_struct1 = self.struct_extractor(
-                match_mask[sample_structure], data
-            )  # [N', C, H, W]
 
-            m0 = self.mlp(torch.cat([feat_c0[sample_structure], m_struct0], dim=1).permute(0, 2, 3, 1))  # [N', H, W, C] 
-            m1 = self.mlp(torch.cat([feat_c1[sample_structure], m_struct1], dim=1).permute(0, 2, 3, 1))   
+        m_struct0, m_struct1 = self.struct_extractor(match_mask, data)  # [N, C, H, W]
 
-            m0 = self.norm(m0).permute(0, 3, 1, 2)  # [N', C, H, W]
-            m1 = self.norm(m1).permute(0, 3, 1, 2)
+        m0 = self.mlp(torch.cat([feat_c0, m_struct0], dim=1).permute(0, 2, 3, 1))  # [N, H, W, C] 
+        m1 = self.mlp(torch.cat([feat_c1, m_struct1], dim=1).permute(0, 2, 3, 1))   
 
-            feat_structured0[sample_structure] = feat_c0[sample_structure] + m0
-            feat_structured1[sample_structure] = feat_c1[sample_structure] + m1
-    
-        feat_structured0[~sample_structure] = feat_c0[~sample_structure]
-        feat_structured1[~sample_structure] = feat_c1[~sample_structure]
+        m0 = self.norm(m0).permute(0, 3, 1, 2)  # [N, C, H, W]
+        m1 = self.norm(m1).permute(0, 3, 1, 2)
+
+        feat_structured0 = feat_c0 + m0
+        feat_structured1 = feat_c1 + m1
 
         # mask
         mask_c0 = mask_c1 = None  
@@ -72,9 +60,11 @@ class IterativeOptimization(nn.Module):
         feat_c0, feat_c1 = self.self_attention[layer_idx](feat_structured0, feat_structured1, mask_c0, mask_c1)  # [N, C, H, W]
 
         # geomertric cross-attention
-        epipolar_info0, epipolar_info1 = data['epipolar_info0'], data['epipolar_info1']
-        feat_c0, update_mask0 = self.cross_attention_layers[layer_idx](feat_c0, feat_c1, epipolar_info0, mask_c0, mask_c1)  # [N, C, H, W]
-        feat_c1, update_mask1 = self.cross_attention_layers[layer_idx](feat_c1, feat_c0, epipolar_info1, mask_c1, mask_c0)  # [N, C, H, W]
+        epipolar_info0, epipolar_info1 = data['epipolar_info0'], data['epipolar_info1'] 
+
+        # disable epipolar cross attention
+        feat_c0, update_mask0 = self.cross_attention_layers[layer_idx](feat_c0, feat_c1, None, mask_c0, mask_c1)  # [N, C, H, W]
+        feat_c1, update_mask1 = self.cross_attention_layers[layer_idx](feat_c1, feat_c0, None, mask_c1, mask_c0)  # [N, C, H, W]
     
         data.update({
             'update_mask0': update_mask0,
