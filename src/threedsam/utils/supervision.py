@@ -105,9 +105,13 @@ def spvs_coarse(data, config):
             data[k][no_gt_ids] = data[k][copy_ids]
 
         b_ids, i_ids, j_ids = torch.split(b_ids, match_num_gt.tolist()), torch.split(i_ids, match_num_gt.tolist()), torch.split(j_ids, match_num_gt.tolist())
-        b_ids[no_gt_ids] = b_ids[copy_ids]
-        i_ids[no_gt_ids] = i_ids[copy_ids]
-        j_ids[no_gt_ids] = j_ids[copy_ids]
+        for i in range(copy_ids.shape[0]):
+            src_ids = copy_ids[i]
+            dst_ids = no_gt_ids[i]
+
+            b_ids[dst_ids] = b_ids[src_ids]
+            i_ids[dst_ids] = i_ids[src_ids]
+            j_ids[dst_ids] = j_ids[src_ids]
 
         b_ids, i_ids, j_ids = torch.cat(b_ids), torch.cat(i_ids), torch.cat(j_ids)
 
