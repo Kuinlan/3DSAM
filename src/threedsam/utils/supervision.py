@@ -89,36 +89,10 @@ def spvs_coarse(data, config):
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
 
     match_num_gt = torch.sum(conf_matrix_gt.to(torch.int32), dim=(1, 2))
-    has_gt = match_num_gt > 0
-    if N > 1:  # when training
-        assert has_gt.sum() > 0
+    no_gt_match = match_num_gt > 0
 
-    # copy data and ground truth when training
-    if N > 1 and has_gt.sum() < N:
-        no_gt_ids = torch.where(~has_gt)[0]
-        has_gt_ids = torch.where(has_gt)[0]
-        sample = torch.randint(low=0, high=has_gt.sum(), size=(N-has_gt.sum(), ), dtype=torch.int64, device=device)
-        copy_ids = has_gt_ids[sample]
-
-        conf_matrix_gt[no_gt_ids] = conf_matrix_gt[copy_ids]
-        for k in data.keys():
-            data[k][no_gt_ids] = data[k][copy_ids]
-
-        b_ids, i_ids, j_ids = torch.split(b_ids, match_num_gt.tolist()), torch.split(i_ids, match_num_gt.tolist()), torch.split(j_ids, match_num_gt.tolist())
-        for i in range(copy_ids.shape[0]):
-            src_ids = copy_ids[i]
-            dst_ids = no_gt_ids[i]
-
-            b_ids[dst_ids] = b_ids[src_ids]
-            i_ids[dst_ids] = i_ids[src_ids]
-            j_ids[dst_ids] = j_ids[src_ids]
-
-        b_ids, i_ids, j_ids = torch.cat(b_ids), torch.cat(i_ids), torch.cat(j_ids)
-
-        w_pt0_i[no_gt_ids] = w_pt0_i[copy_ids]
-        grid_pt1_i[no_gt_ids] = grid_pt1_i[copy_ids]
-
-    data.update({'conf_matrix_gt': conf_matrix_gt})
+    data.update({'conf_matrix_gt': conf_matrix_gt,
+                 'no_gt_match': no_gt_match})
 
     # 5. save coarse matches(gt) for training fine level
     if len(b_ids) == 0:

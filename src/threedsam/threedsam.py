@@ -46,7 +46,16 @@ class ThreeDSAM(nn.Module):
                 'mask1'(optional) : (torch.Tensor): (N, H, W)
             } 
         """
-       # 1. Local Feature CNN
+        
+        # skip iteration for samples that have no gt matches 
+        device = data['image0'].device
+        N = data['image0'].shape[0]
+        
+        if self.training:
+            self.skip_iteration = data['no_gt_match']
+            self.if_skip_all = self.skip_iteration.sum() == N
+
+        # 1. Local Feature CNN
         data.update({
             'bs': data['image0'].size(0),
             'hw0_i': data['image0'].shape[2:], 'hw1_i': data['image1'].shape[2:]
@@ -71,9 +80,39 @@ class ThreeDSAM(nn.Module):
         feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, mask_c0, mask_c1)
         conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
 
+        # split a batch into two parts
+        feat_c0_all = torch.empty_like(feat_c0)
+        feat_c1_all = torch.empty_like(feat_c1)
+        conf_matrix_all = torch.empty_like(conf_matrix)
+
+        if self.training and self.skip_iteration.sum() > 0 and not self.if_skip_all:
+
+            skip_ids = torch.where(self.skip_iteration == True)[0]
+            non_skip_ids = torch.where(self.skip_iteration == False)[0] 
+
+            feat_c0_skip = feat_c0[skip_ids]
+            feat_c1_skip = feat_c1[skip_ids]
+            conf_matrix_skip = conf_matrix[skip_ids]
+
+            feat_c0_non_skip = feat_c0[non_skip_ids]
+            feat_c1_non_skip = feat_c1[non_skip_ids]
+            conf_matrix_non_skip = conf_matrix[non_skip_ids] 
+
+            data.update({'conf_matrix': conf_matrix_non_skip})
+
+        # when in eval/test mode, no sample need to skip or need to skip the whole batch
+        else:
+            non_skip_ids = torch.arange(N).to(device)
+            feat_c0_non_skip = feat_c0
+            feat_c1_non_skip = feat_c1
+            conf_matrix_non_skip = conf_matrix
+
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
-            match_mask = get_match_mask(conf_matrix, self.thr, self.border_rm, data)  # (N', L, L)
+            if self.training and self.if_skip_all:
+                break
+
+            match_mask = get_match_mask(conf_matrix_non_skip, self.thr, self.border_rm, data)  # (N', L, L)
             match_num = match_mask.sum(dim=(1, 2)).to(torch.int32)
             
             # save each iteration's coarse matching result
@@ -84,15 +123,27 @@ class ThreeDSAM(nn.Module):
                 break
 
             # perform optimization
-            feat_c0, feat_c1 = self.iterative_optimization(feat_c0, feat_c1, match_mask, n_iter, data)  # [N, C, H, W]
+            feat_c0_non_skip, feat_c1_non_skip = self.iterative_optimization(feat_c0_non_skip, feat_c1_non_skip, match_mask, n_iter, non_skip_ids, data)  # [N, C, H, W]
 
-            conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data) 
+            conf_matrix_non_skip = self.update_conf_matrix(feat_c0_non_skip, feat_c1_non_skip, mask_c0, mask_c1, data) 
+
+        # merge two parts
+        if self.training and self.skip_iteration.sum() > 0 and not self.if_skip_all:
+            feat_c0_all[non_skip_ids], feat_c1_all[non_skip_ids] = feat_c0_non_skip, feat_c1_non_skip
+            conf_matrix_all[non_skip_ids] = conf_matrix_non_skip
+        
+            feat_c0_all[skip_ids], feat_c1_all[skip_ids] = feat_c0_skip, feat_c1_skip
+            conf_matrix_all[skip_ids] = conf_matrix_skip
+        else:
+            feat_c0_all = feat_c0_non_skip
+            feat_c1_all = feat_c1_non_skip
+            conf_matrix_all = conf_matrix_non_skip
 
         # 4. coarse matching
-        data.update(**get_coarse_match(conf_matrix, self.config['match_coarse'], self.training, data))
+        data.update(**get_coarse_match(conf_matrix_all, self.config['match_coarse'], self.training, data))
 
         # 5. fine-level pre-process
-        feat_f0_unfold, feat_f1_unfold = self.fine_preprocess(feat_f0, feat_f1, feat_c0, feat_c1, data)  # [M, C, W, W]
+        feat_f0_unfold, feat_f1_unfold = self.fine_preprocess(feat_f0, feat_f1, feat_c0_all, feat_c1_all, data)  # [M, C, W, W]
 
         if feat_f0_unfold.size(0) != 0:  # at least one coarse level predicted
             feat_f0_unfold, feat_f1_unfold = self.threedsam_fine(feat_f0_unfold, feat_f1_unfold)

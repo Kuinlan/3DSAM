@@ -32,7 +32,7 @@ class StructureExtractor(nn.Module):
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
 
-    def forward(self, match_mask, data):
+    def forward(self, match_mask, non_skip_ids, data):
         """
         Args:
             match_mask (torch.Tensor): [N, L, S]
@@ -52,20 +52,20 @@ class StructureExtractor(nn.Module):
         
         conf_matrix = data['conf_matrix']
         scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
-        epipolar_info0 = dict(hw0_c = data['hw0_c'],
-                             hw1_c = data['hw1_c'], 
-                             K0 = data['K0'], 
-                             K1 = data['K1'],
+        epipolar_info0 = dict(hw0_c = data['hw0_c'][non_skip_ids],
+                             hw1_c = data['hw1_c'][non_skip_ids], 
+                             K0 = data['K0'][non_skip_ids], 
+                             K1 = data['K1'][non_skip_ids],
                              scale = scale)
 
-        epipolar_info1 = dict(hw0_c = data['hw1_c'],
-                             hw1_c = data['hw0_c'],
-                             K0 = data['K1'], 
-                             K1 = data['K0'],
+        epipolar_info1 = dict(hw0_c = data['hw1_c'][non_skip_ids],
+                             hw1_c = data['hw0_c'][non_skip_ids],
+                             K0 = data['K1'][non_skip_ids], 
+                             K1 = data['K0'][non_skip_ids],
                              scale = scale)
 
-        pts_3d0 = data['pts_3d0']  # [N, L, 3]
-        pts_3d1 = data['pts_3d1'] 
+        pts_3d0 = data['pts_3d0'][non_skip_ids]  # [N, L, 3]
+        pts_3d1 = data['pts_3d1'][non_skip_ids] 
         
         # 1. get coarse match result
         mask_v, all_j_ids = match_mask.max(dim=2)

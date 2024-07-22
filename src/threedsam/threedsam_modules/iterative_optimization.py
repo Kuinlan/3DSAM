@@ -35,12 +35,12 @@ class IterativeOptimization(nn.Module):
 
         self.norm = nn.LayerNorm(self.d_model)
         
-    def forward(self, feat_c0, feat_c1, match_mask, n_iter, data):
+    def forward(self, feat_c0, feat_c1, match_mask, n_iter, non_skip_ids, data):
         layer_idx = self.layer_assign[n_iter]
 
         data['epipolar_info0'], data['epipolar_info1'] = None, None
 
-        m_struct0, m_struct1 = self.struct_extractor(match_mask, data)  # [N, C, H, W]
+        m_struct0, m_struct1 = self.struct_extractor(match_mask, non_skip_ids, data)  # [N, C, H, W]
 
         m0 = self.mlp(torch.cat([feat_c0, m_struct0], dim=1).permute(0, 2, 3, 1))  # [N, H, W, C] 
         m1 = self.mlp(torch.cat([feat_c1, m_struct1], dim=1).permute(0, 2, 3, 1))   

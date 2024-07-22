@@ -87,7 +87,7 @@ class PL_3DSAM(pl.LightningModule):
         optimizer.zero_grad()
     
     def _trainval_inference(self, batch):
-        with self.profiler.profile("get 3D structure info from DPT"):
+        with self.profiler.profile("get 3D structure info from MDE model"):
             self._update_point_cloud(batch)
 
         with self.profiler.profile("Compute coarse supervision"):
