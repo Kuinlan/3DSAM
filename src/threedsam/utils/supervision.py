@@ -124,7 +124,10 @@ def spvs_coarse(data, config):
         if match_num_gt[n] >= anchor_num:
             sample = torch.randperm(match_num_gt[n], device=device)[:anchor_num]+cumsum_match_gt[n]
         else:
-            sample = torch.randint(low=cumsum_match_gt[n], high=cumsum_match_gt[n+1], size=(anchor_num, ), device=device)
+            if cumsum_match_gt[n] != cumsum_match_gt[n+1]:
+                sample = torch.randint(low=cumsum_match_gt[n], high=cumsum_match_gt[n+1], size=(anchor_num, ), device=device)
+            else:
+                sample = torch.full((anchor_num,), cumsum_match_gt[n], device=device)
 
         anchor_i_gt[n] = i_ids[sample]
         anchor_j_gt[n] = j_ids[sample]

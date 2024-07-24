@@ -42,7 +42,7 @@ class PL_3DSAM(pl.LightningModule):
 
         # Depth Anything v2 initialization
         self.depth_anything = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
-        self.depth_anything.load_state_dict(torch.load('./src/da/depth_anything_v2/weights/depth_anything_v2_vits.pth', map_location='cpu'))
+        self.depth_anything.load_state_dict(torch.load('./weights/depth_anyting_v2/depth_anything_v2_vits.pth', map_location='cpu'))
         self.depth_anything.eval()
 
         # Matcher: ThreeDSAM

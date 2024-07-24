@@ -78,7 +78,7 @@ class ThreeDSAM(nn.Module):
             mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
         
         feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, mask_c0, mask_c1)
-        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
+        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data, 'conf_matrix_init')
 
         # split a batch into two parts
         feat_c0_all = torch.empty_like(feat_c0)
@@ -107,6 +107,8 @@ class ThreeDSAM(nn.Module):
             feat_c1_non_skip = feat_c1
             conf_matrix_non_skip = conf_matrix
 
+        data.update({'non_skip_ids': non_skip_ids})
+
         # 3. iterative optimization
         for n_iter in range(self.iter_num):
             if self.training and self.if_skip_all:
@@ -123,7 +125,7 @@ class ThreeDSAM(nn.Module):
                 break
 
             # perform optimization
-            feat_c0_non_skip, feat_c1_non_skip = self.iterative_optimization(feat_c0_non_skip, feat_c1_non_skip, match_mask, n_iter, non_skip_ids, data)  # [N, C, H, W]
+            feat_c0_non_skip, feat_c1_non_skip = self.iterative_optimization(feat_c0_non_skip, feat_c1_non_skip, match_mask, n_iter, data)  # [N, C, H, W]
 
             conf_matrix_non_skip = self.update_conf_matrix(feat_c0_non_skip, feat_c1_non_skip, mask_c0, mask_c1, data) 
 
@@ -134,10 +136,13 @@ class ThreeDSAM(nn.Module):
         
             feat_c0_all[skip_ids], feat_c1_all[skip_ids] = feat_c0_skip, feat_c1_skip
             conf_matrix_all[skip_ids] = conf_matrix_skip
+
         else:
             feat_c0_all = feat_c0_non_skip
             feat_c1_all = feat_c1_non_skip
             conf_matrix_all = conf_matrix_non_skip
+
+        data.update({'conf_matrix': conf_matrix_all})
 
         # 4. coarse matching
         data.update(**get_coarse_match(conf_matrix_all, self.config['match_coarse'], self.training, data))

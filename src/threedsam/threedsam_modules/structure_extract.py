@@ -1,13 +1,10 @@
 import torch
 import torch.nn as nn
-from kornia.utils import create_meshgrid
 from einops.einops import rearrange
 
-from ..utils.anchor_sample import get_anchor, anchor_padding_topK
-from ..utils.geometry import estimate_pose, get_scaled_K
+from ..utils.anchor_sample import get_anchor
 
 INF = 1e9
-
 
 @torch.no_grad()
 def l1_norm(tensor: torch.Tensor, dim: int):
@@ -32,7 +29,7 @@ class StructureExtractor(nn.Module):
         self.dim_color = config['d_color']    # 256
         self.dim_struct = config['d_struct']    # 128
 
-    def forward(self, match_mask, non_skip_ids, data):
+    def forward(self, match_mask, data):
         """
         Args:
             match_mask (torch.Tensor): [N, L, S]
@@ -50,6 +47,7 @@ class StructureExtractor(nn.Module):
         """
         N, L, S = match_mask.shape
         
+        non_skip_ids = data['non_skip_ids']
         conf_matrix = data['conf_matrix']
         scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
         epipolar_info0 = dict(hw0_c = data['hw0_c'][non_skip_ids],
@@ -75,7 +73,7 @@ class StructureExtractor(nn.Module):
 
         # 2. get anchor points and estimate relative pose   
         anchor_i_ids, anchor_j_ids, R, t = get_anchor(
-            b_ids, i_ids, j_ids, mconf, N, 
+            b_ids, i_ids, j_ids, mconf,
             self.train_anchor_num, self.training, data
         )  # [N, ANCHOR_NUM, 2]
         
