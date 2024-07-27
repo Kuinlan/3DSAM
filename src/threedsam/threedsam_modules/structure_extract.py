@@ -50,14 +50,14 @@ class StructureExtractor(nn.Module):
         non_skip_ids = data['non_skip_ids']
         conf_matrix = data['conf_matrix']
         scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
-        epipolar_info0 = dict(hw0_c = data['hw0_c'][non_skip_ids],
-                             hw1_c = data['hw1_c'][non_skip_ids], 
+        epipolar_info0 = dict(hw0_c = data['hw0_c'],
+                             hw1_c = data['hw1_c'], 
                              K0 = data['K0'][non_skip_ids], 
                              K1 = data['K1'][non_skip_ids],
                              scale = scale)
 
-        epipolar_info1 = dict(hw0_c = data['hw1_c'][non_skip_ids],
-                             hw1_c = data['hw0_c'][non_skip_ids],
+        epipolar_info1 = dict(hw0_c = data['hw1_c'],
+                             hw1_c = data['hw0_c'],
                              K0 = data['K1'][non_skip_ids], 
                              K1 = data['K0'][non_skip_ids],
                              scale = scale)

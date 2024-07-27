@@ -52,7 +52,12 @@ class PL_3DSAM(pl.LightningModule):
         # Pretrained weights
         if pretrained_ckpt:
             state_dict = torch.load(pretrained_ckpt, map_location='cpu')['state_dict']
-            self.matcher.load_state_dict(state_dict, strict=True)
+            _state_dict = {}
+            for k in state_dict.keys():
+                if not k.startswith('depth_anything'):
+                    _state_dict[k] = state_dict[k]
+
+            self.matcher.load_state_dict(_state_dict, strict=True)
             logger.info(f"Load \'{pretrained_ckpt}\' as pretrained checkpoint")
         
         # Testing
