@@ -27,7 +27,8 @@ class StructureExtractor(nn.Module):
         self.train_anchor_thr = config['anchor_thr']    # 0.5
         self.border_rm = config['border_rm']    # 2
         self.dim_color = config['d_color']    # 256
-        self.dim_struct = config['d_struct']    # 128
+        self.dim_struct = config['d_struct']
+        
 
     def forward(self, match_mask, data):
         """

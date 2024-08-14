@@ -16,6 +16,7 @@ class AG_RoPE_EncoderLayer(nn.Module):
                  no_flash=False,
                  rope=False,
                  npe=None,
+                 linear=False,
                  fp32=False,
                  ):
         super(AG_RoPE_EncoderLayer, self).__init__()
@@ -35,7 +36,7 @@ class AG_RoPE_EncoderLayer(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)        
 
-        self.attention = Attention(no_flash, self.nhead, self.dim, fp32)
+        self.attention = Attention(no_flash, self.nhead, self.dim, fp32, linear)
 
         self.merge = nn.Linear(d_model, d_model, bias=False)
 
@@ -103,9 +104,9 @@ class LocalFeatureTransformer(nn.Module):
         self.rope = config['rope']
 
         self_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
-                                            config['no_flash'], config['rope'], config['npe'], self.fp32)
+                                            config['no_flash'], config['rope'], config['npe'], config['linear_attention'], self.fp32)
         cross_layer = AG_RoPE_EncoderLayer(config['d_model'], config['nhead'], config['agg_size0'], config['agg_size1'],
-                                            config['no_flash'], False, config['npe'], self.fp32)
+                                            config['no_flash'], False, config['npe'], config['linear_attention'], self.fp32)
         self.layers = nn.ModuleList([copy.deepcopy(self_layer) if _ == 'self' \
                                      else copy.deepcopy(cross_layer) for _ in self.layer_names])
         self._reset_parameters()

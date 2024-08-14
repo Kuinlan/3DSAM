@@ -101,12 +101,16 @@ def pad_feature(m, mask_h0, mask_w0, x_mask):
 
 
 class Attention(Module):
-    def __init__(self, no_flash=False, nhead=8, dim=256, fp32=False):
+    def __init__(self, no_flash=False, nhead=8, dim=256, fp32=False, linear=False):
         super().__init__()
         self.flash = FLASH_AVAILABLE and not no_flash
         self.nhead = nhead
         self.dim = dim
         self.fp32 = fp32
+        self.linear = linear
+
+        if linear:
+            self.linear_attention = LinearAttention()
         
     def attention(self, query, key, value, q_mask=None, kv_mask=None):
         assert q_mask is None and kv_mask is None, "Not support generalized attention mask yet."
@@ -136,7 +140,10 @@ class Attention(Module):
         else:
             query, key, value = map(lambda x: rearrange(x, 'n h w (nhead d) -> n (h w) nhead d', nhead=self.nhead, d=self.dim), [query, key, value])
 
-        m = self.attention(query, key, value, q_mask=None, kv_mask=None)
+        if self.linear:
+            m = self.linear_attention(query, key, value, q_mask, kv_mask)
+        else:
+            m = self.attention(query, key, value, q_mask=None, kv_mask=None)
 
         if self.flash:
             m = rearrange(m, 'n nhead L d -> n L nhead d', nhead=self.nhead, d=self.dim)

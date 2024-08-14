@@ -89,7 +89,7 @@ def spvs_coarse(data, config):
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
 
     match_num_gt = torch.sum(conf_matrix_gt.to(torch.int32), dim=(1, 2))
-    no_gt_match = match_num_gt > 0
+    no_gt_match = match_num_gt == 0
 
     data.update({'conf_matrix_gt': conf_matrix_gt,
                  'no_gt_match': no_gt_match})
@@ -124,13 +124,16 @@ def spvs_coarse(data, config):
         if match_num_gt[n] >= anchor_num:
             sample = torch.randperm(match_num_gt[n], device=device)[:anchor_num]+cumsum_match_gt[n]
         else:
-            if cumsum_match_gt[n] != cumsum_match_gt[n+1]:
+            if match_num_gt[n] > 0:
                 sample = torch.randint(low=cumsum_match_gt[n], high=cumsum_match_gt[n+1], size=(anchor_num, ), device=device)
-            else:
-                sample = torch.full((anchor_num,), cumsum_match_gt[n], device=device)
-
-        anchor_i_gt[n] = i_ids[sample]
-        anchor_j_gt[n] = j_ids[sample]
+            else:  # no ground truth matches
+                sample = None
+        if sample is not None:
+            anchor_i_gt[n] = i_ids[sample]
+            anchor_j_gt[n] = j_ids[sample]
+        else:
+            anchor_i_gt[n] = torch.full((anchor_num, ), 0, dtype=torch.int64, device=device)
+            anchor_j_gt[n] = torch.full((anchor_num, ), 0, dtype=torch.int64, device=device)
 
     data.update({
         'match_num_gt': match_num_gt,

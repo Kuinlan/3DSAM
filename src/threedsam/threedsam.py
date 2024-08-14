@@ -28,7 +28,6 @@ class ThreeDSAM(nn.Module):
         self.iter_num = config['n_iter']
 
         self.temperature = config['match_coarse']['dsmax_temperature']
-
         # for getting anchor points
         self.thr = config['extractor']['anchor_thr']
         self.border_rm = config['extractor']['border_rm']
@@ -126,6 +125,7 @@ class ThreeDSAM(nn.Module):
 
             # perform optimization
             feat_c0_non_skip, feat_c1_non_skip = self.iterative_optimization(feat_c0_non_skip, feat_c1_non_skip, match_mask, n_iter, data)  # [N, C, H, W]
+            
 
             conf_matrix_non_skip = self.update_conf_matrix(feat_c0_non_skip, feat_c1_non_skip, mask_c0, mask_c1, data) 
 
