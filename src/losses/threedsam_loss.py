@@ -2,8 +2,9 @@ from loguru import logger
 
 import torch
 import torch.nn as nn
-
-
+import torch.nn.functional as F
+from torch.nn.functional import interpolate
+from einops.einops import rearrange
 class ThreeDSAMLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -16,8 +17,72 @@ class ThreeDSAMLoss(nn.Module):
         self.correct_thr = self.loss_config['fine_correct_thr']
         self.c_pos_w = self.loss_config['pos_weight']
         self.c_neg_w = self.loss_config['neg_weight']
+
         # fine-level
         self.fine_type = self.loss_config['fine_type']
+
+        # depth-map
+        self.depth_max = self.loss_config['depth_max']
+        self.depth_min = self.loss_config['depth_min']
+        self.num_bins = self.loss_config['num_bin']
+
+    def compute_depth_loss(self, depth_logits0, depth_logits1, depth_map0, depth_map1, data):
+        assert 'depth0' in data, 'We need to supervise depth information during training.'
+        # downsampling to coarse scale (where depth info stays at)
+        gt_depth_map0 = interpolate(data['depth0'].unsqueeze(1), data['hw0_c'], mode='nearest')
+        gt_depth_map1 = interpolate(data['depth1'].unsqueeze(1), data['hw1_c'], mode='nearest')
+        gt_depth_map0 = rearrange(gt_depth_map0, 'n c h w -> (n c) h w')
+        gt_depth_map1 = rearrange(gt_depth_map1, 'n c h w -> (n c) h w')
+        
+        # generate mask for background
+        bg_mask0 = gt_depth_map0 < 1e-5
+        bg_mask1 = gt_depth_map1 < 1e-5
+
+        # 0. filter bg mask for ground truth depth maps
+        gt_depth_map0[bg_mask0] = self.depth_max
+        gt_depth_map1[bg_mask1] = self.depth_max
+        
+        # 1. calculate focal loss for depth logits
+        bin_size = (self.depth_max - self.depth_min) / (self.num_bins - 1)
+        indices0 = (gt_depth_map0 - self.depth_min) / bin_size
+        indices1 = (gt_depth_map1 - self.depth_min) / bin_size
+        indices0 = indices0.type(torch.int64) # [N H W]
+        indices1 = indices1.type(torch.int64)
+
+        # For image
+        input_soft0 = F.softmax(depth_logits0, dim=1)
+        log_input_soft0 = F.log_softmax(depth_logits0, dim=1)
+        
+        shape0 = indices0.shape
+        target_one_hot0 = torch.zeros((shape0[0], depth_logits0.shape[1]) + shape0[1:], device=depth_logits0.device, dtype=depth_logits0.dtype)
+        print(indices0.max())
+        target_one_hot0 = target_one_hot0.scatter_(1, indices0.unsqueeze(1), 1.0) + 1e-6
+        
+        weight0 = torch.pow(-input_soft0 + 1.0, self.loss_config['focal_gamma'])
+        focal0 = -self.loss_config['focal_alpha'] * weight0 * log_input_soft0
+        loss_focal0 = torch.einsum('bc...,bc...->b...', (target_one_hot0, focal0))
+        # loss_focal0_mean = 1.0 * loss_focal0[bg_mask0].sum() + 10.0 * loss_focal0[~bg_mask0].sum()
+        # loss_focal0_mean = loss_focal0_mean / (data['hw0_c'][0] * data['hw0_c'][1])
+
+        # For image1
+        input_soft1 = F.softmax(depth_logits1, dim=1)
+        log_input_soft1 = F.log_softmax(depth_logits1, dim=1)
+
+        shape1 = indices1.shape
+        target_one_hot1 = torch.zeros((shape1[0], depth_logits1.shape[1]) + shape1[1:], device=depth_logits1.device, dtype=depth_logits1.dtype)
+        target_one_hot1 = target_one_hot1.scatter_(1, indices1.unsqueeze(1), 1.0) + 1e-6
+
+        weight1 = torch.pow(-input_soft1 + 1.0, self.loss_config['focal_gamma'])
+        focal1 = -self.loss_config['focal_alpha'] * weight1 * log_input_soft1
+        loss_focal1 = torch.einsum('bc...,bc...->b...', (target_one_hot1, focal1))
+        # loss_focal1_mean = 1.0 * loss_focal1[bg_mask1].sum() + 10.0 * loss_focal1[~bg_mask1].sum()
+        # loss_focal1_mean = loss_focal1_mean / (data['hw1_c'][0] * data['hw1_c'][1])
+
+        # 2. calculate l1 loss for depth loss
+        loss_dense_depth0 = torch.abs((depth_map0 - gt_depth_map0)[~bg_mask0]).sum() / ((~bg_mask0).sum() + 1e-4)
+        loss_dense_depth1 = torch.abs((depth_map1 - gt_depth_map1)[~bg_mask1]).sum() / ((~bg_mask1).sum() + 1e-4)
+
+        return loss_focal0.mean()+loss_focal1.mean(), loss_dense_depth0+loss_dense_depth1
 
     def compute_coarse_loss(self, conf, conf_gt, weight=None):
         """ Point-wise CE / Focal Loss with 0 / 1 confidence as gt.
@@ -158,7 +223,7 @@ class ThreeDSAMLoss(nn.Module):
             c_weight = None
         return c_weight
 
-    def forward(self, data):
+    def forward(self, data, depth_logits0, depth_logits1, depth_map0, depth_map1):
         """
         Update:
             data (dict): update{
@@ -187,6 +252,16 @@ class ThreeDSAMLoss(nn.Module):
         else:
             assert self.training is False
             loss_scalars.update({'loss_f': torch.tensor(1.)})  # 1 is the upper bound
+
+        # 3. depth-guided loss
+        if depth_logits0 is not None: # only calculate when passed in
+            loss_depth_focal, loss_depth_dense = self.compute_depth_loss(depth_logits0, depth_logits1, depth_map0, depth_map1, data)
+
+            loss += loss_depth_focal * self.loss_config['depth_focal_weight']
+            loss_scalars.update({"loss_depth_focal": loss_depth_focal.clone().detach().cpu()})
+
+            loss += loss_depth_dense * self.loss_config['depth_dense_weight']
+            loss_scalars.update({"loss_depth_dense": loss_depth_dense.clone().detach().cpu()})
 
         loss_scalars.update({'loss': loss.clone().detach().cpu()})
         data.update({"loss": loss, "loss_scalars": loss_scalars})

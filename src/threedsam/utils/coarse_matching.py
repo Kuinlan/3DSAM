@@ -84,7 +84,7 @@ def get_match_mask(conf_matrix, thr, border_rm, data):
     return mask
 
 @torch.no_grad()
-def get_coarse_match(conf_matrix, config, is_training, data):
+def get_coarse_match(conf_matrix, config, is_training, data, pick_sample=True):
     _device = conf_matrix.device
 
     thr = config['thr']
@@ -105,7 +105,7 @@ def get_coarse_match(conf_matrix, config, is_training, data):
 
     # 3. Random sampling of training samples for fine-level LoFTR
     # (optional) pad samples with gt coarse-level matches
-    if is_training:
+    if is_training and pick_sample:
         # NOTE:
         # The sampling is performed across all pairs in a batch without manually balancing
         # #samples for fine-level increases w.r.t. batch_size

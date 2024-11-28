@@ -1,3 +1,0 @@
-/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/test/build/CMakeFiles/exec.dir
-/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/test/build/CMakeFiles/edit_cache.dir
-/home/morgen/projects/python/DL/3DSAM/src/threedsam/threedsam_modules/ext_modules/test/build/CMakeFiles/rebuild_cache.dir

@@ -43,7 +43,6 @@ def spvs_coarse(data, config):
     scale0 = scale * data['scale0'][:, None] if 'scale0' in data else scale
     scale1 = scale * data['scale1'][:, None] if 'scale1' in data else scale
     h0, w0, h1, w1 = map(lambda x: x // scale, [H0, W0, H1, W1])
-    anchor_num = config['THREEDSAM']['EXTRACTOR']['ANCHOR_NUM'] 
 
     # 2. warp grids
     # create kpts in meshgrid and resize them to image resolution
@@ -88,11 +87,7 @@ def spvs_coarse(data, config):
 
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
 
-    match_num_gt = torch.sum(conf_matrix_gt.to(torch.int32), dim=(1, 2))
-    no_gt_match = match_num_gt == 0
-
-    data.update({'conf_matrix_gt': conf_matrix_gt,
-                 'no_gt_match': no_gt_match})
+    data.update({'conf_matrix_gt': conf_matrix_gt})
 
     # 5. save coarse matches(gt) for training fine level
     if len(b_ids) == 0:
@@ -108,40 +103,7 @@ def spvs_coarse(data, config):
         'spv_j_ids': j_ids
     })
 
-    # 6. prepare backup gt matches for case where there is no predicted anchor point 
-    match_num_gt = conf_matrix_gt.sum(dim=(1, 2)).to(torch.int32)
-    cumsum_match_gt = match_num_gt.cumsum(dim=0)
-    cumsum_match_gt = torch.cat(
-        [
-            torch.tensor([0], device=cumsum_match_gt.device, dtype=torch.int32),
-            cumsum_match_gt,
-        ]
-    )  # [N + 1, ]
-
-    anchor_i_gt = torch.zeros((N, anchor_num), device=device)
-    anchor_j_gt = torch.zeros((N, anchor_num), device=device)
-    for n in range(N):
-        if match_num_gt[n] >= anchor_num:
-            sample = torch.randperm(match_num_gt[n], device=device)[:anchor_num]+cumsum_match_gt[n]
-        else:
-            if match_num_gt[n] > 0:
-                sample = torch.randint(low=cumsum_match_gt[n], high=cumsum_match_gt[n+1], size=(anchor_num, ), device=device)
-            else:  # no ground truth matches
-                sample = None
-        if sample is not None:
-            anchor_i_gt[n] = i_ids[sample]
-            anchor_j_gt[n] = j_ids[sample]
-        else:
-            anchor_i_gt[n] = torch.full((anchor_num, ), 0, dtype=torch.int64, device=device)
-            anchor_j_gt[n] = torch.full((anchor_num, ), 0, dtype=torch.int64, device=device)
-
-    data.update({
-        'match_num_gt': match_num_gt,
-        'anchor_i_gt': anchor_i_gt,
-        'anchor_j_gt': anchor_j_gt
-    })
-
-    # 7. save intermediate results (for fast fine-level computation)
+    # 6. save intermediate results (for fast fine-level computation)
     data.update({
         'spv_w_pt0_i': w_pt0_i,
         'spv_pt1_i': grid_pt1_i

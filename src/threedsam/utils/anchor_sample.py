@@ -1,5 +1,5 @@
 import torch
-from src.threedsam.utils.geometry import estimate_pose, get_scaled_K
+from src.threedsam.utils.geometry import estimate_pose, estimate_pose_np, get_scaled_K
 
 # def anchor_padding_topK(mask, anchor_num_max, data, is_training=False):
 #     N = mask.shape[0]
@@ -52,15 +52,20 @@ def get_anchor(b_ids, i_ids, j_ids, mconf,
     non_skip_ids = data['non_skip_ids']
     batch_size = non_skip_ids.shape[0]
     scale = data['hw0_i'][0] // data['hw0_c'][0]
+    # scale = 1
 
-    K0 = get_scaled_K(data['K0'][non_skip_ids].clone(), scale)
-    K1 = get_scaled_K(data['K1'][non_skip_ids].clone(), scale)
+    K0 = data['K0'][non_skip_ids].clone()
+    K1 = data['K1'][non_skip_ids].clone()
+    K0 = get_scaled_K(K0, scale)
+    K1 = get_scaled_K(K1, scale)
 
     # get 2D coordinate for pose estimation
     pts0 = torch.stack([i_ids % data['hw0_c'][1], 
-                        i_ids // data['hw0_c'][1]], dim=-1).to(torch.float32)  
+                        i_ids // data['hw0_c'][1]], dim=-1)
+    pts0 = pts0.to(torch.float32)
     pts1 = torch.stack([j_ids % data['hw1_c'][1], 
-                        j_ids // data['hw1_c'][1]], dim=-1).to(torch.float32)
+                        j_ids // data['hw1_c'][1]], dim=-1)
+    pts1 = pts1.to(torch.float32)
     device = pts0.device
 
     anc_i_ids = torch.zeros((batch_size, anchor_num_max), device=device, dtype=torch.int64)
@@ -81,7 +86,7 @@ def get_anchor(b_ids, i_ids, j_ids, mconf,
             j_ids_n = j_ids[mask]
             pts0_n = pts0[mask]
             pts1_n = pts1[mask]
-            weight_n = mconf[mask]
+            # weight_n = mconf[mask]
             match_num_n = pts0_n.shape[0]
 
             if match_num_n >= anchor_num_max:
@@ -98,10 +103,14 @@ def get_anchor(b_ids, i_ids, j_ids, mconf,
                     anc_j_ids[n] = anc_j_gt[n]
 
             # pose estimation
-            if match_num_n >= 8:
-                R[[n]], t[[n]] = estimate_pose(pts0_n[None], pts1_n[None], K0[n][None], K1[n][None], weight_n[None])  # [1, 3, 3], [1, 3, 1] 
-            else:
+            ret = estimate_pose_np(pts0_n, pts1_n, K0[n], K1[n])  # [1, 3, 3], [1, 3, 1] 
+            if ret is None:
                 R[n], t[n] = R_gt[n], t_gt[n]
+            else:
+                _R, _t, inliers = ret
+                _t = _t.reshape(3, 1)
+                R[n] = torch.from_numpy(_R).to(torch.float32).to(device)
+                t[n] = torch.from_numpy(_t).to(torch.float32).to(device)
 
     # eval/test
     else:  
@@ -114,10 +123,14 @@ def get_anchor(b_ids, i_ids, j_ids, mconf,
         anc_i_ids[0] = i_ids[sample] 
         anc_j_ids[0] = j_ids[sample]
 
-        if (match_num >= 8):
-            R, t = estimate_pose(pts0[None], pts1[None], K0, K1, mconf[None])
-        else:
+        ret = estimate_pose_np(pts0, pts1, K0[0], K1[0])
+        if ret is None:
             R = torch.eye(3, device=device)[None] 
             t = torch.zeros(size=(3, 1), device=device)[None]
+        else:
+            _R, _t, inliers = ret
+            _t = _t.reshape(3, 1)
+            R = torch.from_numpy(_R[None]).to(torch.float32).to(device)
+            t = torch.from_numpy(_t[None]).to(torch.float32).to(device)
 
     return anc_i_ids, anc_j_ids, R, t

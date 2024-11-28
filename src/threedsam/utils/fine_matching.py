@@ -13,7 +13,7 @@ class FineMatching(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, feat_f0, feat_f1, data):
+    def forward(self, feat_f0, feat_f1, data, get_pose=False):
         """
         Args:
             feat0 (torch.Tensor): [M, WW, C]
@@ -25,17 +25,16 @@ class FineMatching(nn.Module):
                 'mkpts0_f' (torch.Tensor): [M, 2],
                 'mkpts1_f' (torch.Tensor): [M, 2]}
         """
-        M, C, W, _ = feat_f0.shape
-        WW = W**2
+        M, WW, C = feat_f0.shape
         W = int(math.sqrt(WW))
         scale = data['hw0_i'][0] / data['hw0_f'][0]
         self.M, self.W, self.WW, self.C, self.scale = M, W, WW, C, scale
 
-        feat_f0 = rearrange(feat_f0, 'n c h w -> n (h w) c')
-        feat_f1 = rearrange(feat_f1, 'n c h w -> n (h w) c')
+        # feat_f0 = rearrange(feat_f0, 'n c h w -> n (h w) c')
+        # feat_f1 = rearrange(feat_f1, 'n c h w -> n (h w) c')
 
         # corner case: if no coarse matches found
-        if M == 0:
+        if not get_pose and M == 0:
             assert self.training == False, "M is always >0, when training, see coarse_matching.py"
             # logger.warning('No matches found in coarse-level.')
             data.update({

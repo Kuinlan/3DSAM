@@ -11,9 +11,9 @@ data_cfg_path="configs/data/scannet_trainval.py"
 main_cfg_path="configs/loftr/indoor/loftr_ds_dense.py"
 
 n_nodes=1
-n_gpus_per_node=4
+n_gpus_per_node=1
 torch_num_workers=4
-batch_size=4
+batch_size=2
 pin_memory=true
 exp_name="indoor-ds-bs=$(($n_gpus_per_node * $n_nodes * $batch_size))"
 
@@ -30,4 +30,4 @@ python -u ./train.py \
     --num_sanity_val_steps=10 \
     --benchmark=True \
     --max_epochs=30 \
-    --parallel_load_data
+    --parallel_load_data \

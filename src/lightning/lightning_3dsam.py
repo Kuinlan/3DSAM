@@ -42,11 +42,13 @@ class PL_3DSAM(pl.LightningModule):
 
         # Depth Anything v2 initialization
         self.depth_anything = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
-        self.depth_anything.load_state_dict(torch.load('./weights/depth_anyting_v2/depth_anything_v2_vits.pth', map_location='cpu'))
+        self.depth_anything.load_state_dict(torch.load('src/da/depth_anything_v2/weights/depth_anything_v2_vits.pth', map_location='cpu'))
         self.depth_anything.eval()
 
         # Matcher: ThreeDSAM
         self.matcher = ThreeDSAM(config=_config['threedsam'])
+        self.load_loftr_frozen("weights/loftr/indoor_ds_new.ckpt")
+        
         self.loss = ThreeDSAMLoss(_config)
 
         # Pretrained weights
@@ -63,6 +65,30 @@ class PL_3DSAM(pl.LightningModule):
         # Testing
         self.dump_dir = dump_dir
         
+    # load loftr pretrain params and froze them
+    def load_loftr_frozen(self, ckpt_path):
+        state_dict = torch.load(ckpt_path, map_location='cpu')['state_dict']
+        state_dict_partial = {}
+        for k in state_dict.keys():
+            key = k.split('.', 1)[1]
+            if key.startswith("backbone"):
+                state_dict_partial.update({k: state_dict[k]})
+            if key.startswith("loftr_coarse"):
+                tail = key.split('.', 1)[1]
+                new_key = "matcher." + "loftr_coarse." + tail 
+                state_dict_partial.update({new_key: state_dict[k]})
+            if key.startswith("loftr_fine"):
+                tail = key.split('.', 1)[1]
+                new_key = "matcher." + "loftr_fine." + tail
+                state_dict_partial.update({new_key: state_dict[k]})
+            if key.startswith("fine_preprocess"):
+                state_dict_partial.update({k: state_dict[k]})
+
+        self.matcher.load_state_dict(state_dict_partial, strict=False)
+        for name, param in self.matcher.named_parameters():
+            if name in state_dict_partial.keys():
+                param.requires_grad=False
+
     def configure_optimizers(self):
         # FIXME: The scheduler did not work properly when `--resume_from_checkpoint`
         optimizer = build_optimizer(self, self.config)
@@ -93,19 +119,19 @@ class PL_3DSAM(pl.LightningModule):
     
     def _trainval_inference(self, batch):
         with self.profiler.profile("get 3D structure info from MDE model"):
-            self._update_point_cloud(batch)
+            self._update_relative_depth(batch)
 
         with self.profiler.profile("Compute coarse supervision"):
             compute_supervision_coarse(batch, self.config)
         
         with self.profiler.profile("ThreeDSAM"):
-            self.matcher(batch)
+            de_ids0, de_ids1, de_map0, de_map1 = self.matcher(batch)
 
         with self.profiler.profile("Compute fine supervision"):
             compute_supervision_fine(batch, self.config)
             
         with self.profiler.profile("Compute losses"):
-            self.loss(batch)
+            self.loss(batch, de_ids0, de_ids1, de_map0, de_map1)
     
     def _compute_metrics(self, batch):
         with self.profiler.profile("Copmute metrics"):
@@ -125,24 +151,20 @@ class PL_3DSAM(pl.LightningModule):
         return ret_dict, rel_pair_names
 
     @torch.no_grad()
-    def _update_point_cloud(self, batch):
-        input0 = batch['image_color0']  # (N, h, w, 3)
+    def _update_relative_depth(self, batch):
+        input0 = batch['image_color0']  # (N, 3, h, w)
         input1 = batch['image_color1']
 
         img_size = batch['image0'].shape[-2:]
 
-        K0 = batch['K0']  # (N, 3, 3)
-        K1 = batch['K1']
-
-        prediction0 = self.depth_anything.infer_to_model(input0, img_size, downsample=8)  # (1, N, h, w)
-        prediction1 = self.depth_anything.infer_to_model(input1, img_size, downsample=8)  # (1, N, h, w)
-            
-        pts_3d0 = get_point_cloud(prediction0.squeeze(dim=1), K0)
-        pts_3d1 = get_point_cloud(prediction1.squeeze(dim=1), K1)
+        depth0 = self.depth_anything.infer_to_model(input0, img_size, downsample=8)  # (N, 1, h, w)
+        depth1 = self.depth_anything.infer_to_model(input1, img_size, downsample=8)  # (N, 1, h, w)
+        depth0 = (depth0 - depth0.min()) / (depth0.max() - depth0.min()) * 255.0  # [0 - 255]
+        depth1 = (depth1 - depth1.min()) / (depth1.max() - depth1.min()) * 255.0
 
         batch.update({
-            'pts_3d0': pts_3d0,
-            'pts_3d1': pts_3d1
+            'rel_depth0': depth0.squeeze(dim=1),  # (N, h, w)
+            'rel_depth1': depth1.squeeze(dim=1)
         }) 
     
     def training_step(self, batch, batch_idx):

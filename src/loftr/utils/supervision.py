@@ -43,9 +43,6 @@ def spvs_coarse(data, config):
     scale0 = scale * data['scale0'][:, None] if 'scale0' in data else scale
     scale1 = scale * data['scale1'][:, None] if 'scale1' in data else scale
     h0, w0, h1, w1 = map(lambda x: x // scale, [H0, W0, H1, W1])
-    anchor_num = config['THREEDSAM']['EXTRACTOR']['ANCHOR_NUM'] 
-    train_pad_num_anchor_min = config['THREEDSAM']['EXTRACTOR']['TRAIN_PAD_NUM_ANCHOR_MIN'] 
-    seed = config['THREEDSAM']['EXTRACTOR']['ANCHOR_SAMPLER_SEED'] 
 
     # 2. warp grids
     # create kpts in meshgrid and resize them to image resolution
@@ -90,36 +87,6 @@ def spvs_coarse(data, config):
 
     conf_matrix_gt[b_ids, i_ids, j_ids] = 1
     data.update({'conf_matrix_gt': conf_matrix_gt})
-    
-    # prepare gt matches for anchor points padding
-    num_match_gt = torch.sum(conf_matrix_gt, dim=(1, 2))
-    cumsum_match_gt = num_match_gt.cumsum(dim=0)
-    pad_anchor_idx = []
-    for idx in range(N):
-        if (num_match_gt >= train_pad_num_anchor_min):
-            low = 0 if idx == 0 else cumsum_match_gt[idx-1]
-            high = cumsum_match_gt[idx]
-            # no replacement
-            anchor_index_fixed = (
-                torch.randperm(num_match_gt[idx], device=device) + low,
-            )[:train_pad_num_anchor_min]
-            # with replacement
-            anchor_index_non_fixed = (
-                torch.randint(
-                    low, high, (anchor_num - train_pad_num_anchor_min, ),
-                     dtype=torch.int64, device=device
-                )
-            )
-            anchor_index = torch.cat([anchor_index_fixed, anchor_index_non_fixed], dim=0) 
-            pad_anchor_idx.append(anchor_index)
-        else: 
-            pad_anchor_idx.append(torch.zeros((anchor_num, ), device=device, dtype=torch.int64))
-    pad_anchor_idx = torch.stack(pad_anchor_idx, dim=0)  # [N, NUM_ANCHOR]
-
-    data.update({
-        'num_match_gt': num_match_gt,  # [N, ] 
-        'pad_anchor_idx': pad_anchor_idx  # [N, NUM_ANCHOR]
-    })
 
     # 5. save coarse matches(gt) for training fine level
     if len(b_ids) == 0:

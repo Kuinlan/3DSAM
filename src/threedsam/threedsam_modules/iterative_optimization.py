@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from .structure_extract import StructureExtractor
 from ..backbone.resnet_fpn import BasicBlock
-from .transformer import LocalFeatureTransformer
+from .transformer import LocalFeatureTransformer, AG_RoPe_Transformer
 from .geometric_attention import GA_EncoderLayer
 
 
@@ -23,7 +23,7 @@ class IterativeOptimization(nn.Module):
 
         # Modules
         self.struct_extractor = StructureExtractor(config['extractor'])
-        self.self_attention = nn.ModuleList([LocalFeatureTransformer(config['self_attention']) for _ in range(self.layer_num)])
+        self.self_attention = nn.ModuleList([AG_RoPe_Transformer(config['self_attention']) for _ in range(self.layer_num)])
         
         self.cross_attention_layers = nn.ModuleList([GA_EncoderLayer(config['geometric_attention']) for _ in range(self.layer_num)])
 
@@ -34,7 +34,8 @@ class IterativeOptimization(nn.Module):
         self.conv = nn.Sequential(*layers)
 
         # appearance & structure cross attention
-        self.fetch_struct_cross_layer = LocalFeatureTransformer(config['fetch_struct_cross_attention'])
+        self.struct_self_attention_layer = AG_RoPe_Transformer(config['struct_self_attention'])
+        self.struct_cross_attention_layer = AG_RoPe_Transformer(config['struct_cross_attention'])
 
         # ffn
         self.mlp = nn.Sequential(
@@ -73,8 +74,9 @@ class IterativeOptimization(nn.Module):
             m0 = self.norm2(m0).permute(0, 3, 1, 2)
             m1 = self.norm2(m1).permute(0, 3, 1, 2)
 
-        feat_c0, m0 = self.fetch_struct_cross_layer(feat_c0, m0)
-        feat_c1, m1 = self.fetch_struct_cross_layer(feat_c1, m1)
+        m0, m1 = self.struct_self_attention_layer(m0, m1)
+        feat_c0, m0 = self.struct_cross_attention_layer(feat_c0, m0)
+        feat_c1, m1 = self.struct_cross_attention_layer(feat_c1, m1)
 
         data.update({
             'm_struct0': m0,

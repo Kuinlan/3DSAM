@@ -1,5 +1,6 @@
 import torch
 import cv2
+import numpy as np
 from kornia.utils import create_meshgrid
 from kornia.geometry.epipolar import find_fundamental, decompose_essential_matrix
 
@@ -15,8 +16,38 @@ from kornia.geometry.epipolar import find_fundamental, decompose_essential_matri
 
 #     return R
 
+def estimate_pose_np(kpts0, kpts1, K0, K1, thresh=0.5, conf=0.99999):
+    if len(kpts0) < 5:
+        return None
+    # normalize keypoints
+    kpts0 = (kpts0 - K0[[0, 1], [2, 2]][None]) / K0[[0, 1], [0, 1]][None]
+    kpts1 = (kpts1 - K1[[0, 1], [2, 2]][None]) / K1[[0, 1], [0, 1]][None]
+
+    # normalize ransac threshold
+    ransac_thr = thresh / np.mean([K0[0, 0], K1[1, 1], K0[0, 0], K1[1, 1]])
+
+    # compute pose with cv2
+    E, mask = cv2.findEssentialMat(
+        kpts0, kpts1, np.eye(3), threshold=ransac_thr, prob=conf, method=cv2.RANSAC)
+    if E is None:
+        print("\nE is None while trying to recover pose.\n")
+        return None
+
+    # recover pose from E
+    best_num_inliers = 0
+    ret = None
+    for _E in np.split(E, len(E) / 3):
+        n, R, t, _ = cv2.recoverPose(_E, kpts0, kpts1, np.eye(3), 1e9, mask=mask)
+        if n > best_num_inliers:
+            ret = (R, t[:, 0], mask.ravel() > 0)
+            best_num_inliers = n
+
+    return ret
+
 @torch.no_grad()
 def get_scaled_K(K: torch.Tensor, scale):
+    print(K)
+    K = K.clone()
     if K.dim() == 2:
         K[:2, :] = K[:2, :] / scale
     elif K.dim() == 3:
@@ -34,11 +65,12 @@ def estimate_pose(kpts0: torch.Tensor, kpts1: torch.Tensor, K0, K1, weights=None
     return R, t
 
 @torch.no_grad()
-def get_point_cloud(depth, K, scale = 1):
+def get_point_cloud(depth, K, scale = 8):
     """
     Args:
         depth (torch.Tensor): [N, h, w]
         K (torch.Tensor): [N, 3, 3]
+        scale (int)
 
     Returns:
         pts_3d: (torch.Tensor): [N, L, 3]
@@ -46,17 +78,15 @@ def get_point_cloud(depth, K, scale = 1):
 
     _device = depth.device
     N = depth.shape[0]
-    h0 = depth.shape[1] // scale 
-    w0 = depth.shape[2] // scale
+    h0 = depth.shape[1] 
+    w0 = depth.shape[2] 
     grid_pt = create_meshgrid(h0, w0, False, device = _device).reshape(1, h0*w0, 2).repeat(N, 1, 1)  # (N, h * w, 2)
     grid_pt *= scale
-    grid_pt_long = grid_pt.round().long()
 
-    # Get depth for all points
-    kpts_depth = depth[:, grid_pt_long[0, :, 1], grid_pt_long[0, :, 0]] # (N, h, w) -> (N, h * w)
+    depth = depth.reshape(N, h0 * w0) # [N, h * w]
      
     # Unproject
-    grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, :, [0]])], dim=-1) * kpts_depth[..., None]  # (N, h * w, 3)
+    grid_pt_h = torch.cat([grid_pt, torch.ones_like(grid_pt[:, :, [0]])], dim=-1) * depth[..., None]  # (N, h * w, 3)
     
     # (K.inv() @ P.T).T = P @ k.inv().T
     pts_3d = grid_pt_h @ K.inverse().transpose(1, 2)  # (N, L, 3)

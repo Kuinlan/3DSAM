@@ -5,43 +5,7 @@ from kornia import create_meshgrid
 
 from ..utils.geometry import get_epipolar_line_std, get_scaled_K
 from .transformer import RoPEPositionEncodingSine
-
-
-
-class Attention(nn.Module):
-    def __init__(self, nhead=8, dim=256):
-        super().__init__()
-        self.nhead = nhead
-        self.dim = dim
-        
-    def forward(self, query, key, value, q_mask=None, kv_mask=None):
-        """ 
-        Args:
-            queries: [N, L, H, D]
-            keys: [N, S, H, D]
-            values: [N, S, H, D]
-            q_mask: [N, L]
-            kv_mask: [N, S]
-        Returns:
-            queried_values: (N, L, H, D)
-        """
-        query, key, value = map(lambda x: rearrange(x, 'n h w (nhead d) -> n (h w) nhead d', nhead=self.nhead, d=self.dim), [query, key, value])
-
-        QK = torch.einsum("nlhd,nshd->nlsh", query, key)
-        
-        # masking
-        if kv_mask is not None:
-            mask = q_mask[:, :, None, None] * kv_mask[:, None, :, None]
-            QK = torch.masked_fill(mask, float('-inf'))
-        
-        # Compute the attention and the weighted average
-        softmax_temp = 1. / query.size(3)**.5  # sqrt(D)
-        A = torch.softmax(softmax_temp * QK, dim=2)
-
-        out = torch.einsum("nlsh,nshd->nlhd", A, value)
-
-        return out
-
+from src.threedsam.threedsam_modules.linear_attention import Attention
 
 class EpipolarAttention(nn.Module):
     def __init__(self, nhead=8, dim=256, area_width=10):
@@ -189,7 +153,9 @@ class GA_EncoderLayer(nn.Module):
         self.nhead = config['nhead']
         self.dim = d_model // self.nhead
         self.agg_size0, self.agg_size1 = config['agg_size0'], config['agg_size1']
+        self.no_flash = config['no_flash']
         self.rope = config['rope']
+        self.linear = config['linear_attention']
 
         # aggregate and position encoding
         self.aggregate = nn.Conv2d(d_model, d_model, kernel_size=self.agg_size0, padding=0, stride=self.agg_size0, bias=False, groups=d_model) if self.agg_size0 != 1 else nn.Identity()
@@ -201,7 +167,7 @@ class GA_EncoderLayer(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)        
 
-        self.attention = Attention(self.nhead, self.dim)
+        self.attention = Attention(config['no_flash'], config['nhead'], self.dim, self.fp32, config['linear_attention'])
         self.geometric_attention = EpipolarAttention(self.nhead, self.dim, config['area_width']) 
 
         self.merge = nn.Linear(d_model, d_model, bias=False)

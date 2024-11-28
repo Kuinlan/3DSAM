@@ -27,9 +27,7 @@ class StructureExtractor(nn.Module):
         self.train_anchor_thr = config['anchor_thr']    # 0.5
         self.border_rm = config['border_rm']    # 2
         self.dim_color = config['d_color']    # 256
-        self.dim_struct = config['d_struct']
         
-
     def forward(self, match_mask, data):
         """
         Args:
@@ -109,3 +107,50 @@ class StructureExtractor(nn.Module):
         return m_struct0, m_struct1
 
     
+class PoseExtractor(nn.Module):
+
+    def __init__(self, config):
+        super(PoseExtractor, self).__init__()
+        self.train_anchor_num = config['anchor_num']    # 32
+        self.train_anchor_thr = config['anchor_thr']    # 0.5
+        self.border_rm = config['border_rm']    # 2
+        self.dim_color = config['d_color']    # 256
+        
+    def forward(self, match_mask, data):
+        """
+        Args:
+            match_mask (torch.Tensor): [N, L, S]
+            data (dict): with keys 
+                [pts_3d0 (torch.Tensor): [N, L, 3]
+                 pts_3d1 (torch.Tensor): [N, L, 3]]
+        Update:
+            data (dict): {
+                epipolar_info0 (dict)
+                epipolar_info1 (dict)
+            }
+        Returns:
+            m_struct0 (torch.Tensor): [N, C, H, W]
+            m_struct1 (torch.Tensor): [N, C, H, W]
+        """
+        N, L, S = match_mask.shape
+        
+        conf_matrix = data['conf_matrix']
+
+        # 1. get coarse match result
+        mask_v, all_j_ids = match_mask.max(dim=2)
+        b_ids, i_ids = torch.where(mask_v)
+        j_ids = all_j_ids[b_ids, i_ids]
+        mconf = conf_matrix[b_ids, i_ids, j_ids]
+
+        # 2. get anchor points and estimate relative pose   
+        anchor_i_ids, anchor_j_ids, R, t = get_anchor(
+            b_ids, i_ids, j_ids, mconf,
+            self.train_anchor_num, self.training, data
+        )  # [N, ANCHOR_NUM, 2]
+        
+        epipolar_info0['R'] = R  # [N, 3, 3]
+        epipolar_info0['t'] = t  # [N, 3, 1]
+
+
+        data.update(epipolar_info0 = epipolar_info0,
+                    epipolar_info1 = epipolar_info1)

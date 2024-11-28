@@ -1,14 +1,20 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+import cv2
 from einops.einops import rearrange
 
 from .backbone import build_backbone
 from .threedsam_modules import (LocalFeatureTransformer, 
                                 FinePreprocess,
-                                IterativeOptimization)
+                                CameraAwareDepthNet,
+                                PositionalEncoding3D,
+                                DepthGuidedEncoder)
+from .utils.position_encoding import PositionEncodingSine
 from .utils.coarse_matching import get_coarse_match, get_match_mask
 from .utils.fine_matching import FineMatching
+from .utils.geometry import estimate_pose_np
 
 INF = 1e9
 
@@ -17,23 +23,26 @@ class ThreeDSAM(nn.Module):
         super().__init__()
         self.config = config
 
-        # Modules
+        # LoFTR Modules
         self.backbone = build_backbone(config)
-        self.init_attention = LocalFeatureTransformer(config['coarse_init'])
-        self.iterative_optimization = IterativeOptimization(config)
+        self.pos_encoding2d = PositionEncodingSine(config['coarse_init']['d_model']) 
+        self.loftr_coarse = LocalFeatureTransformer(config['coarse_init'])
         self.fine_preprocess = FinePreprocess(config)
-        self.threedsam_fine = LocalFeatureTransformer(config["fine"])
+        self.loftr_fine = LocalFeatureTransformer(config['fine'])
         self.fine_matching = FineMatching()
 
-        self.iter_num = config['n_iter']
+        # 3DPPE
+        self.depth_net = CameraAwareDepthNet(config['depth_predictor'])
+        self.pos_encoding3d = PositionalEncoding3D(config['pe'])
 
+        # depth aware atten
+        self.depth_aware_coarse = DepthGuidedEncoder(config['depth_coarse'])
+        self.depth_fine_preprocess = FinePreprocess(config)
+        self.depth_aware_fine = LocalFeatureTransformer(config['fine'])
+        self.depth_fine_matching = FineMatching()
+
+        # matching
         self.temperature = config['match_coarse']['dsmax_temperature']
-        # for getting anchor points
-        self.thr = config['extractor']['anchor_thr']
-        self.border_rm = config['extractor']['border_rm']
-
-        # for interference
-        self.anchor_num_min = config['extractor']['anchor_num_min']
 
     def forward(self, data):
         """
@@ -49,10 +58,6 @@ class ThreeDSAM(nn.Module):
         # skip iteration for samples that have no gt matches 
         device = data['image0'].device
         N = data['image0'].shape[0]
-        
-        if self.training:
-            self.skip_iteration = data['no_gt_match']
-            self.if_skip_all = self.skip_iteration.sum() == N
 
         # 1. Local Feature CNN
         data.update({
@@ -71,95 +76,48 @@ class ThreeDSAM(nn.Module):
             'hw0_f': feat_f0.shape[2:], 'hw1_f': feat_f1.shape[2:]
         })
 
-        # 2. init attention with RoPE
+        # 2. LoFTR module 
+        T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
+
+        # 3. depth predictor
+        depth_map_pred0, depth_map_pred1, \
+        depth_embed0, depth_embed1, \
+        depth_prob0, depth_prob1 = self.depth_net(feat_c0, feat_c1, data)
+
+        # 4. 3DPPE
+        pos_embed0 = self.pos_encoding3d(depth_map_pred0, data['hw0_i'], data['K0'], T_0to1)  # (N, L, 256)
+        pos_embed1 = self.pos_encoding3d(depth_map_pred1, data['hw1_i'], data['K1'])
+
+        # use no mask
         mask_c0, mask_c1 = None, None
-        if 'mask0' in data:
-            mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
-        
-        feat_c0, feat_c1 = self.init_attention(feat_c0, feat_c1, mask_c0, mask_c1)
-        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data, 'conf_matrix_init')
 
-        # split a batch into two parts
-        feat_c0_all = torch.empty_like(feat_c0)
-        feat_c1_all = torch.empty_like(feat_c1)
-        conf_matrix_all = torch.empty_like(conf_matrix)
+        # 5. depth aware atten
+        feat_c0 = rearrange(feat_c0, 'n c h w -> n (h w) c')
+        feat_c1 = rearrange(feat_c1, 'n c h w -> n (h w) c')
+        depth_embed0 = rearrange(depth_embed0, 'n c h w -> n (h w) c')
+        depth_embed1 = rearrange(depth_embed1, 'n c h w -> n (h w) c')
+        feat_c0, feat_c1 = self.depth_aware_coarse(feat_c0, feat_c1, pos_embed0, pos_embed1, 
+                                                   depth_embed0, depth_embed1, mask_c0, mask_c1)
 
-        if self.training and self.skip_iteration.sum() > 0 and not self.if_skip_all:
+        # 6. coarse match
+        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data) 
+        data.update({'conf_matrix': conf_matrix})
 
-            skip_ids = torch.where(self.skip_iteration == True)[0]
-            non_skip_ids = torch.where(self.skip_iteration == False)[0] 
+        data.update(**get_coarse_match(conf_matrix, self.config['match_coarse'], self.training, data))
 
-            feat_c0_skip = feat_c0[skip_ids]
-            feat_c1_skip = feat_c1[skip_ids]
-            conf_matrix_skip = conf_matrix[skip_ids]
-
-            feat_c0_non_skip = feat_c0[non_skip_ids]
-            feat_c1_non_skip = feat_c1[non_skip_ids]
-            conf_matrix_non_skip = conf_matrix[non_skip_ids] 
-
-            data.update({'conf_matrix': conf_matrix_non_skip})
-
-        # when in eval/test mode, no sample need to skip or need to skip the whole batch
-        else:
-            non_skip_ids = torch.arange(N).to(device)
-            feat_c0_non_skip = feat_c0
-            feat_c1_non_skip = feat_c1
-            conf_matrix_non_skip = conf_matrix
-
-        data.update({'non_skip_ids': non_skip_ids})
-
-        # 3. iterative optimization
-        for n_iter in range(self.iter_num):
-            if self.training and self.if_skip_all:
-                break
-
-            match_mask = get_match_mask(conf_matrix_non_skip, self.thr, self.border_rm, data)  # (N', L, L)
-            match_num = match_mask.sum(dim=(1, 2)).to(torch.int32)
+        # 7. fine-level refinement
+        feat_f0_unfold, feat_f1_unfold = self.depth_fine_preprocess(feat_f0, feat_f1, feat_c0, feat_c1, data)
+        if feat_f0_unfold.size(0) != 0:
+            feat_f0_unfold, feat_f1_unfold = self.depth_aware_fine(feat_f0_unfold, feat_f1_unfold)
             
-            # save each iteration's coarse matching result
-            data.update({f'match_mask_{n_iter}': match_mask})
-                
-            # quit iterative optimization
-            if not self.training and match_num[0] == 0:
-                break
-
-            # perform optimization
-            feat_c0_non_skip, feat_c1_non_skip = self.iterative_optimization(feat_c0_non_skip, feat_c1_non_skip, match_mask, n_iter, data)  # [N, C, H, W]
-            
-
-            conf_matrix_non_skip = self.update_conf_matrix(feat_c0_non_skip, feat_c1_non_skip, mask_c0, mask_c1, data) 
-
-        # merge two parts
-        if self.training and self.skip_iteration.sum() > 0 and not self.if_skip_all:
-            feat_c0_all[non_skip_ids], feat_c1_all[non_skip_ids] = feat_c0_non_skip, feat_c1_non_skip
-            conf_matrix_all[non_skip_ids] = conf_matrix_non_skip
-        
-            feat_c0_all[skip_ids], feat_c1_all[skip_ids] = feat_c0_skip, feat_c1_skip
-            conf_matrix_all[skip_ids] = conf_matrix_skip
-
-        else:
-            feat_c0_all = feat_c0_non_skip
-            feat_c1_all = feat_c1_non_skip
-            conf_matrix_all = conf_matrix_non_skip
-
-        data.update({'conf_matrix': conf_matrix_all})
-
-        # 4. coarse matching
-        data.update(**get_coarse_match(conf_matrix_all, self.config['match_coarse'], self.training, data))
-
-        # 5. fine-level pre-process
-        feat_f0_unfold, feat_f1_unfold = self.fine_preprocess(feat_f0, feat_f1, feat_c0_all, feat_c1_all, data)  # [M, C, W, W]
-
-        if feat_f0_unfold.size(0) != 0:  # at least one coarse level predicted
-            feat_f0_unfold, feat_f1_unfold = self.threedsam_fine(feat_f0_unfold, feat_f1_unfold)
-
-        # 6. match fine-level
+        # 8. match fine-level
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
-    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data, key='conf_matrix'):
-        feat0 = rearrange(feat0, 'n c h w -> n (h w) c')
-        feat1 = rearrange(feat1, 'n c h w -> n (h w) c')
+        return depth_prob0, depth_prob1, depth_map_pred0, depth_map_pred1
 
+
+
+    def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
         feat0, feat1 = map(lambda feat: feat / feat.shape[-1]**.5,
                                 [feat0, feat1])
         sim_matrix = torch.einsum("nlc,nsc->nls", feat0, feat1) / self.temperature
@@ -169,18 +127,75 @@ class ThreeDSAM(nn.Module):
                 ~(mask_c0[..., None] * mask_c1[:, None]).bool(), 
                 -INF)
         
-        if 'update_mask0' in data and data['update_mask0'] is not None:
-            update_mask0, update_mask1 = data['update_mask0'], data['update_mask1']  # [N, L, S], [N, S, L]
-            sim_matrix.masked_fill_(~(update_mask0 * update_mask1.transpose(1, 2).bool()), -INF) 
-
         conf_matrix = F.softmax(sim_matrix, 1) * F.softmax(sim_matrix, 2) 
-        conf_matrix = conf_matrix.nan_to_num_(nan=0)
-
-        data.update({key: conf_matrix})
-        if key != 'conf_matrix':
-            data.update({'conf_matrix': conf_matrix})
+        data.update({'conf_matrix': conf_matrix})
 
         return conf_matrix
+
+    @torch.no_grad()
+    def get_pose(self, data, feat_c0, feat_c1, feat_f0, feat_f1):
+        """get pose estimation"""
+        mask_c0, mask_c1 = None, None
+        if 'mask0' in data:
+            mask_c0, mask_c1 = data['mask0'].flatten(-2), data['mask1'].flatten(-2)
+        
+        feat_c0 = rearrange(self.pos_encoding2d(feat_c0), 'n c h w -> n (h w) c')
+        feat_c1 = rearrange(self.pos_encoding2d(feat_c1), 'n c h w -> n (h w) c')
+
+        feat_c0, feat_c1 = self.loftr_coarse(feat_c0, feat_c1, mask_c0, mask_c1)
+
+        conf_matrix = self.update_conf_matrix(feat_c0, feat_c1, mask_c0, mask_c1, data)
+
+        # coarse matching
+        data.update(**get_coarse_match(conf_matrix, self.config['match_coarse'], self.training, data, pick_sample=False))
+
+        # fine-level pre-process
+        feat_f0_unfold, feat_f1_unfold = self.fine_preprocess(feat_f0, feat_f1, feat_c0, feat_c1, data)  # [M, WW, C]
+
+        if feat_f0_unfold.size(0) != 0:  # at least one coarse level predicted
+            feat_f0_unfold, feat_f1_unfold = self.loftr_fine(feat_f0_unfold, feat_f1_unfold)
+
+        # match fine-level
+        self.fine_matching(feat_f0_unfold, feat_f1_unfold, data, get_pose=True)
+
+        # estimate relative pose with all the matches
+        pixel_thr = 0.5
+        conf = 0.99999
+        m_bids = data['m_bids'].cpu().numpy()
+        pts0 = data['mkpts0_f'].cpu().numpy()
+        pts1 = data['mkpts1_f'].cpu().numpy()
+        K0 = data['K0'].cpu().numpy()
+        K1 = data['K1'].cpu().numpy()
+        T_0to1 = torch.zeros((K0.shape[0], 4, 4), device=data['K0'].device)
+        for bs in range(K0.shape[0]):
+            mask = m_bids == bs
+            ret = estimate_pose_np(pts0[mask], pts1[mask], K0[bs], K1[bs], pixel_thr, conf=conf)
+            if ret is None:
+                if self.training: # help training
+                    T_0to1[bs] = data['T_0to1'][bs]
+                else:
+                    T_0to1[bs] = torch.eye(4)
+            else:
+                R, t, inliers = ret
+                R = torch.from_numpy(R)
+                t = torch.from_numpy(t)
+                # check sanity
+                if torch.any(torch.isnan(R)) or torch.any(torch.isinf(R)) or torch.any(torch.isnan(t)) or torch.any(torch.isinf(t)):
+                    if self.training: # help training
+                        T_0to1[bs] = data['T_0to1'][bs]
+                    else:
+                        T_0to1[bs] = torch.eye(4)
+                else:
+                    T_0to1[bs][:3, :3] = R
+                    T_0to1[bs][:3, 3] = t
+            # # For training, 50 percent using ground truth Transformation
+            # if self.training:
+            #     if np.random.rand() < 0.5: # using Ground Truth
+            #         T_0to1[bs] = data['T_0to1'][bs]
+            # # before output T, normalize t
+            # T_0to1[bs][0:3, 3] = (T_0to1[bs][0:3, 3] / torch.linalg.norm(T_0to1[bs][0:3, 3]))
+        
+        return T_0to1
 
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):
