@@ -206,24 +206,26 @@ class SELikeModule(nn.Module):
     def __init__(self, in_channel=256, feat_channel=256, intrinsic_channel=6):
         super(SELikeModule, self).__init__()
         self.input_conv = nn.Conv2d(in_channel, feat_channel, kernel_size=1, padding=0)
-        # self.fc = nn.Sequential(
-        #     nn.BatchNorm1d(intrinsic_channel),
-        #     nn.Linear(intrinsic_channel, feat_channel),
-        #     nn.Sigmoid())
+        self.fc = nn.Sequential(
+            nn.BatchNorm1d(intrinsic_channel),
+            nn.Linear(intrinsic_channel, feat_channel),
+            nn.Sigmoid())
 
-    def forward(self, x, depth_embed):
+    def forward(self, x: torch.Tensor, depth_embed, intrinsic):
         """
         Args:
             x: (B, C, H, W)
             depth_embed: (B, C, H, W)
+            intrinsic: (B, 6)
 
         Returns:
             x:  (B*N_view, C, H, W)
         """
+        b, c, _, _ = x.shape
         x = self.input_conv(x)  # (B, C, H, W)
-        y = depth_embed
-        return x * y
 
+        y = self.fc(intrinsic).view(b, c, 1, 1)
+        return x * y.expand_as(x) * depth_embed 
 
 
 class ConvModule(nn.Module):
@@ -264,6 +266,7 @@ class CameraAwareDepthNet(nn.Module):
         self.depth_max = config['depth_max']
         self.depth_min = config['depth_min']
         self.depth_num = config['num_depth_bins']
+
 
         self.with_context_encoder = config['with_context_encoder']
         self.with_depth_correction = config['with_depth_correction']
@@ -346,8 +349,8 @@ class CameraAwareDepthNet(nn.Module):
             feat1: img feature map  (B, C, H, W)
             data: Dict
         Returns:
-            depth_prob0:  (B, D, H, W)
             depth_prob1:  (B, D, H, W)
+            depth_prob0:  (B, D, H, W)
             depth_direct0: (B, H, W)
             depth_direct1: (B, H, W)
             context0: (B, C_context, H, W)
@@ -356,6 +359,11 @@ class CameraAwareDepthNet(nn.Module):
         B, _, H, W = feat0.shape
         rel_depth0 = data['rel_depth0']  # (B, H, W)
         rel_depth1 = data['rel_depth1']
+
+        intrinsics0 = data['K0'][..., :2, :].contiguous()   # 6
+        intrinsics1 = data['K1'][..., :2, :].contiguous()   # 6
+        intrinsics0 = intrinsics0.view(B, -1)
+        intrinsics1 = intrinsics1.view(B, -1)
 
         depth_embed0 = self.interpolate_depth_embed(rel_depth0)  # (N, H, W, C)
         depth_embed1 = self.interpolate_depth_embed(rel_depth1) 
@@ -369,8 +377,8 @@ class CameraAwareDepthNet(nn.Module):
         context0 = self.context_conv(feat0)  # (B*N_view, C_context, H, W)
         context1 = self.context_conv(feat1) 
 
-        depth0 = self.se(feat0, depth_embed0)  # (B, C_mid, H, W)
-        depth1 = self.se(feat1, depth_embed1)  # (B, C_mid, H, W)
+        depth0 = self.se(feat0, depth_embed0, intrinsics0)  # (B, C_mid, H, W)
+        depth1 = self.se(feat1, depth_embed1, intrinsics1)  # (B, C_mid, H, W)
 
         if not self.with_pgd:
             depth_stem0 = self.depth_stem(depth0)

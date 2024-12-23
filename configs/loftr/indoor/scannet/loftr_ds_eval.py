@@ -10,7 +10,7 @@ to be consistent with the results in our paper.
 
 from src.config.default import _CN as cfg
 
-cfg.LOFTR.COARSE.TEMP_BUG_FIX = False
-cfg.LOFTR.MATCH_COARSE.MATCH_TYPE = 'dual_softmax'
+cfg.THREEDSAM.COARSE_INIT.TEMP_BUG_FIX = False
+# cfg.LOFTR.MATCH_COARSE.MATCH_TYPE = 'dual_softmax'
 
-cfg.LOFTR.MATCH_COARSE.BORDER_RM = 0
+cfg.THREEDSAM.MATCH_COARSE.BORDER_RM = 0

@@ -42,7 +42,7 @@ class PL_3DSAM(pl.LightningModule):
 
         # Depth Anything v2 initialization
         self.depth_anything = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
-        self.depth_anything.load_state_dict(torch.load('src/da/depth_anything_v2/weights/depth_anything_v2_vits.pth', map_location='cpu'))
+        self.depth_anything.load_state_dict(torch.load('weights/depth_anyting_v2/depth_anything_v2_vits.pth', map_location='cpu'))
         self.depth_anything.eval()
 
         # Matcher: ThreeDSAM
@@ -85,9 +85,9 @@ class PL_3DSAM(pl.LightningModule):
                 state_dict_partial.update({k: state_dict[k]})
 
         self.matcher.load_state_dict(state_dict_partial, strict=False)
-        for name, param in self.matcher.named_parameters():
-            if name in state_dict_partial.keys():
-                param.requires_grad=False
+        # for name, param in self.matcher.named_parameters():
+        #     if name in state_dict_partial.keys():
+        #         param.requires_grad=False
 
     def configure_optimizers(self):
         # FIXME: The scheduler did not work properly when `--resume_from_checkpoint`
@@ -262,7 +262,7 @@ class PL_3DSAM(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         with self.profiler.profile("Depth Anything v2 estimation."):
-            self._update_point_cloud(batch)
+            self._update_relative_depth(batch)
             
         with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)

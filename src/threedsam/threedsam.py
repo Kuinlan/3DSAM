@@ -77,7 +77,14 @@ class ThreeDSAM(nn.Module):
         })
 
         # 2. LoFTR module 
-        T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
+
+        # feat_c0, feat_c1, T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
+        # feat_c0 = rearrange(feat_c0, 'n (h w) c -> n c h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
+        # feat_c1 = rearrange(feat_c1, 'n (h w) c -> n c h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
+        
+        # #  enable if test performance with gt pose provided 
+        # if not self.training:
+        T_0to1 = data['T_0to1']
 
         # 3. depth predictor
         depth_map_pred0, depth_map_pred1, \
@@ -156,7 +163,7 @@ class ThreeDSAM(nn.Module):
             feat_f0_unfold, feat_f1_unfold = self.loftr_fine(feat_f0_unfold, feat_f1_unfold)
 
         # match fine-level
-        self.fine_matching(feat_f0_unfold, feat_f1_unfold, data, get_pose=True)
+        self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
         # estimate relative pose with all the matches
         pixel_thr = 0.5
@@ -195,7 +202,7 @@ class ThreeDSAM(nn.Module):
             # # before output T, normalize t
             # T_0to1[bs][0:3, 3] = (T_0to1[bs][0:3, 3] / torch.linalg.norm(T_0to1[bs][0:3, 3]))
         
-        return T_0to1
+        return feat_c0, feat_c1, T_0to1
 
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):
