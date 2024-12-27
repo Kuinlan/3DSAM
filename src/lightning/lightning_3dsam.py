@@ -125,13 +125,13 @@ class PL_3DSAM(pl.LightningModule):
             compute_supervision_coarse(batch, self.config)
         
         with self.profiler.profile("ThreeDSAM"):
-            de_ids0, de_ids1, de_map0, de_map1 = self.matcher(batch)
+            de_map0, de_map1 = self.matcher(batch)
 
         with self.profiler.profile("Compute fine supervision"):
             compute_supervision_fine(batch, self.config)
             
         with self.profiler.profile("Compute losses"):
-            self.loss(batch, de_ids0, de_ids1, de_map0, de_map1)
+            self.loss(batch, de_map0, de_map1)
     
     def _compute_metrics(self, batch):
         with self.profiler.profile("Copmute metrics"):
@@ -159,12 +159,12 @@ class PL_3DSAM(pl.LightningModule):
 
         depth0 = self.depth_anything.infer_to_model(input0, img_size, downsample=8)  # (N, 1, h, w)
         depth1 = self.depth_anything.infer_to_model(input1, img_size, downsample=8)  # (N, 1, h, w)
-        depth0 = (depth0 - depth0.min()) / (depth0.max() - depth0.min()) * 255.0  # [0 - 255]
-        depth1 = (depth1 - depth1.min()) / (depth1.max() - depth1.min()) * 255.0
+        depth0 = (depth0 - depth0.min()) / (depth0.max() - depth0.min())  # [0 - 255]
+        depth1 = (depth1 - depth1.min()) / (depth1.max() - depth1.min())
 
         batch.update({
-            'rel_depth0': depth0.squeeze(dim=1),  # (N, h, w)
-            'rel_depth1': depth1.squeeze(dim=1)
+            'rel_depth0': depth0,  # (N, 1, h, w)
+            'rel_depth1': depth1
         }) 
     
     def training_step(self, batch, batch_idx):

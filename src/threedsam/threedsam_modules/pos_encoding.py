@@ -10,10 +10,7 @@ class PositionalEncoding3D(nn.Module):
     def __init__(self, config):
         super().__init__()
         # make in config
-        self.depth_max = config['depth_max']
-        self.depth_min = config['depth_min']
         self.embed_dims = config['embed_dims'] # 256
-        self.position_range = config['position_range']
         self.eps = 1e-5
         
         # define 3d position embedding
@@ -59,10 +56,15 @@ class PositionalEncoding3D(nn.Module):
         # reshape
         coords3d = rearrange(coords3d, 'n c (w h) -> n w h c', w=W, h=H)  # (N, W, H, 3)
 
+        def norm_coord(coords3d: torch.Tensor):
+            max = coords3d.view(B, -1, 3).max(dim=1)[0].view(B, 1, 1, 3) 
+            min = coords3d.view(B, -1, 3).min(dim=1)[0].view(B, 1, 1, 3)
+            coords3d = (coords3d - min) / (max - min)
+
+            return coords3d
+
         # Normalize to certain scale
-        coords3d[..., 0:1] = (coords3d[..., 0:1] - self.position_range[0]) / (self.position_range[3] - self.position_range[0])
-        coords3d[..., 1:2] = (coords3d[..., 1:2] - self.position_range[1]) / (self.position_range[4] - self.position_range[1])
-        coords3d[..., 2:3] = (coords3d[..., 2:3] - self.position_range[2]) / (self.position_range[5] - self.position_range[2])
+        coords3d = norm_coord(coords3d)
 
         # encoding the coordinates
         coords3d = rearrange(coords3d, 'n w h c -> n (h w) c')  # (N, L, 3）

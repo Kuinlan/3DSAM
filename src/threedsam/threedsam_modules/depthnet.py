@@ -5,7 +5,6 @@ from torchvision.ops import DeformConv2d
 from einops.einops import rearrange
 
 
-
 class BasicBlock(nn.Module):
     def __init__(self,
                  inplanes,
@@ -202,29 +201,70 @@ class ASPP(nn.Module):
                 m.bias.data.zero_()
 
 
+# class SELikeModule(nn.Module):
+#     def __init__(self, in_channel=256, feat_channel=256, intrinsic_channel=6):
+#         super(SELikeModule, self).__init__()
+#         self.input_conv = nn.Conv2d(in_channel, feat_channel, kernel_size=1, padding=0)
+#         # self.fc = nn.Sequential(
+#         #     nn.BatchNorm1d(intrinsic_channel),
+#         #     nn.Linear(intrinsic_channel, feat_channel),
+#         #     nn.Sigmoid())
+
+#     def forward(self, x, depth_embed):
+#         """
+#         Args:
+#             x: (B, C, H, W)
+#             depth_embed: (B, C, H, W)
+
+#         Returns:
+#             x:  (B*N_view, C, H, W)
+#         """
+#         x = self.input_conv(x)  # (B, C, H, W)
+#         y = depth_embed
+#         return x + y
+
+class DepthEmbedModule(nn.Module):
+    def __init__(self, in_channel=512, out_channel=256):
+        super(DepthEmbedModule, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(512, 256, bias=False),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(256, 256, bias=False)
+        )
+
+        self.norm = nn.LayerNorm(out_channel)
+
+    def forward(self, x, depth_embed):
+        _, _, H, W = x.shape
+        x = rearrange(x, 'n c h w -> n (h w) c').contiguous()
+        depth_embed = rearrange(depth_embed, 'n c h w -> n (h w) c').contiguous()
+        out = self.norm(self.mlp(torch.cat([x, depth_embed], dim=2)))
+        out = rearrange(out, 'n (h w) c -> n c h w', h=H, w=W).contiguous()
+        
+        return out
+
 class SELikeModule(nn.Module):
     def __init__(self, in_channel=256, feat_channel=256, intrinsic_channel=6):
         super(SELikeModule, self).__init__()
         self.input_conv = nn.Conv2d(in_channel, feat_channel, kernel_size=1, padding=0)
-        # self.fc = nn.Sequential(
-        #     nn.BatchNorm1d(intrinsic_channel),
-        #     nn.Linear(intrinsic_channel, feat_channel),
-        #     nn.Sigmoid())
+        self.fc = nn.Sequential(
+            nn.BatchNorm1d(intrinsic_channel),
+            nn.Linear(intrinsic_channel, feat_channel),
+            nn.Sigmoid())
 
-    def forward(self, x, depth_embed):
+    def forward(self, x, cam_params):
         """
         Args:
-            x: (B, C, H, W)
-            depth_embed: (B, C, H, W)
+            x: (B, C_in, H, W)
+            cam_params: (B, 6)
 
         Returns:
-            x:  (B*N_view, C, H, W)
+            x:  (B, C, H, W)
         """
         x = self.input_conv(x)  # (B, C, H, W)
-        y = depth_embed
-        return x * y
-
-
+        b, c, _, _ = x.shape
+        y = self.fc(cam_params).view(b, c, 1, 1)    # (B, C, 1, 1)
+        return x * y.expand_as(x)
 
 class ConvModule(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
@@ -268,6 +308,7 @@ class CameraAwareDepthNet(nn.Module):
         self.with_context_encoder = config['with_context_encoder']
         self.with_depth_correction = config['with_depth_correction']
 
+        self.merge = DepthEmbedModule(in_channel=512, out_channel=256)
         if self.mid_channels is not None:
             mid_channels = self.mid_channels
             self.reduce_conv = ConvModule(
@@ -356,9 +397,16 @@ class CameraAwareDepthNet(nn.Module):
         B, _, H, W = feat0.shape
         rel_depth0 = data['rel_depth0']  # (B, H, W)
         rel_depth1 = data['rel_depth1']
+        intrinsic0 = data['K0'][:, :2, :].clone().contiguous()  
+        intrinsic1 = data['K1'][:, :2, :].clone().contiguous()  
+        intrinsic0 = intrinsic0.view(B, -1)  # (B, 6)
+        intrinsic1 = intrinsic1.view(B, -1)
 
         depth_embed0 = self.interpolate_depth_embed(rel_depth0)  # (N, H, W, C)
         depth_embed1 = self.interpolate_depth_embed(rel_depth1) 
+
+        feat0 = self.merge(feat0, depth_embed0)
+        feat1 = self.merge(feat1, depth_embed1)
 
         # (B*N_view, C, H, W) --> (B*N_view, C_mid, H, W)
         # x 用于估计深度
@@ -366,11 +414,11 @@ class CameraAwareDepthNet(nn.Module):
         if self.reduce_conv is not None:
             feat0 = self.reduce_conv(feat0)
             feat1 = self.reduce_conv(feat1)
+
         context0 = self.context_conv(feat0)  # (B*N_view, C_context, H, W)
         context1 = self.context_conv(feat1) 
-
-        depth0 = self.se(feat0, depth_embed0)  # (B, C_mid, H, W)
-        depth1 = self.se(feat1, depth_embed1)  # (B, C_mid, H, W)
+        depth0 = self.se(feat0, intrinsic0)  # (B, C_mid, H, W)
+        depth1 = self.se(feat1, intrinsic1)  # (B, C_mid, H, W)
 
         if not self.with_pgd:
             depth_stem0 = self.depth_stem(depth0)

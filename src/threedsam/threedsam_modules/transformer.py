@@ -4,7 +4,7 @@ import torch.nn as nn
 from einops.einops import rearrange
 from flash_attn import flash_attn_varlen_func, flash_attn_func
 
-from .linear_attention import Attention, LinearAttention, FullAttention
+from .attention import Attention, LinearAttention, FullAttention
 from ..utils.position_encoding import RoPEPositionEncodingSine
 
 
@@ -346,7 +346,7 @@ class DepthGuidedEncoder(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
     
-    def forward(self, feat0, feat1, pos_embed0, pos_embed1, depth_embed0, depth_embed1, mask0=None, mask1=None, ):
+    def forward(self, feat0, feat1, pos_embed0, pos_embed1, depth_embed0=None, depth_embed1=None, mask0=None, mask1=None, ):
         """Transform visual feature together with depth features
         Args:
             feat0 (torch.Tensor): [N, L, C]
@@ -359,8 +359,9 @@ class DepthGuidedEncoder(nn.Module):
         assert self.d_model == feat0.size(2), "the feature number of src and transformer must be equal"
         for depth_layer, selfAttn_layer, crossAttn_layer in zip(self.depth_layers, self.selfAttn_layers, self.crossAttn_layers):
             # Fetch depth information into features
-            feat0 = depth_layer(feat0, depth_embed0, None, None, mask0, mask0)
-            feat1 = depth_layer(feat1, depth_embed1, None, None, mask1, mask1)
+            if depth_embed0 is not None:
+                feat0 = depth_layer(feat0, depth_embed0, None, None, mask0, mask0)
+                feat1 = depth_layer(feat1, depth_embed1, None, None, mask1, mask1)
             # First self attention with visual information
             feat0 = selfAttn_layer(feat0, feat0, pos_embed0, pos_embed0, mask0, mask0)
             feat1 = selfAttn_layer(feat1, feat1, pos_embed1, pos_embed1, mask1, mask1)

@@ -26,7 +26,29 @@ class ThreeDSAMLoss(nn.Module):
         self.depth_min = self.loss_config['depth_min']
         self.num_bins = self.loss_config['num_bin']
 
-    def compute_depth_loss(self, depth_logits0, depth_logits1, depth_map0, depth_map1, data):
+    def compute_depth_loss_regressed(self, depth_map0, depth_map1, data):
+        assert 'depth0' in data, 'We need to supervise depth information during training.'
+        # downsampling to coarse scale (where depth info stays at)
+        gt_depth_map0 = interpolate(data['depth0'].unsqueeze(1), data['hw0_c'], mode='nearest')
+        gt_depth_map1 = interpolate(data['depth1'].unsqueeze(1), data['hw1_c'], mode='nearest')
+        gt_depth_map0 = rearrange(gt_depth_map0, 'n c h w -> (n c) h w')
+        gt_depth_map1 = rearrange(gt_depth_map1, 'n c h w -> (n c) h w')
+        
+        # generate mask for background
+        bg_mask0 = gt_depth_map0 < 1e-5
+        bg_mask1 = gt_depth_map1 < 1e-5
+
+        # filter bg mask for ground truth depth maps
+        gt_depth_map0[bg_mask0] = self.depth_max
+        gt_depth_map1[bg_mask1] = self.depth_max
+
+        # calculate l1 loss for depth loss
+        loss_dense_depth0 = torch.abs((depth_map0 - gt_depth_map0)[~bg_mask0]).sum() / ((~bg_mask0).sum() + 1e-4)
+        loss_dense_depth1 = torch.abs((depth_map1 - gt_depth_map1)[~bg_mask1]).sum() / ((~bg_mask1).sum() + 1e-4)
+
+        return  loss_dense_depth0+loss_dense_depth1
+
+    def compute_depth_loss_mixed(self, depth_logits0, depth_logits1, depth_map0, depth_map1, data):
         assert 'depth0' in data, 'We need to supervise depth information during training.'
         # downsampling to coarse scale (where depth info stays at)
         gt_depth_map0 = interpolate(data['depth0'].unsqueeze(1), data['hw0_c'], mode='nearest')
@@ -223,7 +245,7 @@ class ThreeDSAMLoss(nn.Module):
             c_weight = None
         return c_weight
 
-    def forward(self, data, depth_logits0, depth_logits1, depth_map0, depth_map1):
+    def forward(self, data, depth_map0, depth_map1):
         """
         Update:
             data (dict): update{
@@ -254,14 +276,17 @@ class ThreeDSAMLoss(nn.Module):
             loss_scalars.update({'loss_f': torch.tensor(1.)})  # 1 is the upper bound
 
         # 3. depth-guided loss
-        if depth_logits0 is not None: # only calculate when passed in
-            loss_depth_focal, loss_depth_dense = self.compute_depth_loss(depth_logits0, depth_logits1, depth_map0, depth_map1, data)
-
-            loss += loss_depth_focal * self.loss_config['depth_focal_weight']
-            loss_scalars.update({"loss_depth_focal": loss_depth_focal.clone().detach().cpu()})
+        if depth_map0 is not None: # only calculate when passed in
+            loss_depth_dense = self.compute_depth_loss_regressed(depth_map0, depth_map1, data)
 
             loss += loss_depth_dense * self.loss_config['depth_dense_weight']
             loss_scalars.update({"loss_depth_dense": loss_depth_dense.clone().detach().cpu()})
+
+        # 4. kld loss
+        if 'kld_loss0' in data.keys():
+            kld_loss = data['kld_loss0'] + data['kld_loss1']
+            loss += kld_loss
+            loss_scalars.update({"kld_loss": kld_loss.clone().detach().cpu()})
 
         loss_scalars.update({'loss': loss.clone().detach().cpu()})
         data.update({"loss": loss, "loss_scalars": loss_scalars})

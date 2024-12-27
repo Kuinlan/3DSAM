@@ -8,7 +8,7 @@ from einops.einops import rearrange
 from .backbone import build_backbone
 from .threedsam_modules import (LocalFeatureTransformer, 
                                 FinePreprocess,
-                                CameraAwareDepthNet,
+                                Perceiver,
                                 PositionalEncoding3D,
                                 DepthGuidedEncoder)
 from .utils.position_encoding import PositionEncodingSine
@@ -32,7 +32,12 @@ class ThreeDSAM(nn.Module):
         self.fine_matching = FineMatching()
 
         # 3DPPE
-        self.depth_net = CameraAwareDepthNet(config['depth_predictor'])
+        # self.depth_net = CameraAwareDepthNet(config['depth_predictor'])
+        self.depth_perceiver = Perceiver(config['perceiver'])
+        self.mlp = nn.Sequential(
+                nn.Linear(config['perceiver']['decoder']['d_latents'], config['coarse_init']['d_model']),
+                nn.Linear(config['coarse_init']['d_model'], config['coarse_init']['d_model']),
+            )
         self.pos_encoding3d = PositionalEncoding3D(config['pe'])
 
         # depth aware atten
@@ -57,7 +62,7 @@ class ThreeDSAM(nn.Module):
         
         # skip iteration for samples that have no gt matches 
         device = data['image0'].device
-        N = data['image0'].shape[0]
+        H, W = data['image0'].shape[-2:]
 
         # 1. Local Feature CNN
         data.update({
@@ -77,12 +82,16 @@ class ThreeDSAM(nn.Module):
         })
 
         # 2. LoFTR module 
-        T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
+        # T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
+        T_0to1 = data['T_0to1']
 
         # 3. depth predictor
+        # update kld loss
         depth_map_pred0, depth_map_pred1, \
-        depth_embed0, depth_embed1, \
-        depth_prob0, depth_prob1 = self.depth_net(feat_c0, feat_c1, data)
+        depth_embed0, depth_embed1 = self.depth_perceiver(feat_c0, feat_c1, data)
+
+        depth_map_pred0 = rearrange(depth_map_pred0, 'n (h w) -> n h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
+        depth_map_pred1 = rearrange(depth_map_pred1, 'n (h w) -> n h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
 
         # 4. 3DPPE
         pos_embed0 = self.pos_encoding3d(depth_map_pred0, data['hw0_i'], data['K0'], T_0to1)  # (N, L, 256)
@@ -94,8 +103,8 @@ class ThreeDSAM(nn.Module):
         # 5. depth aware atten
         feat_c0 = rearrange(feat_c0, 'n c h w -> n (h w) c')
         feat_c1 = rearrange(feat_c1, 'n c h w -> n (h w) c')
-        depth_embed0 = rearrange(depth_embed0, 'n c h w -> n (h w) c')
-        depth_embed1 = rearrange(depth_embed1, 'n c h w -> n (h w) c')
+        depth_embed0 = self.mlp(depth_embed0)  # 1024 -> 256
+        depth_embed1 = self.mlp(depth_embed1)
         feat_c0, feat_c1 = self.depth_aware_coarse(feat_c0, feat_c1, pos_embed0, pos_embed1, 
                                                    depth_embed0, depth_embed1, mask_c0, mask_c1)
 
@@ -113,8 +122,7 @@ class ThreeDSAM(nn.Module):
         # 8. match fine-level
         self.fine_matching(feat_f0_unfold, feat_f1_unfold, data)
 
-        return depth_prob0, depth_prob1, depth_map_pred0, depth_map_pred1
-
+        return  depth_map_pred0, depth_map_pred1
 
 
     def update_conf_matrix(self, feat0, feat1, mask_c0, mask_c1, data):
@@ -195,7 +203,7 @@ class ThreeDSAM(nn.Module):
             # # before output T, normalize t
             # T_0to1[bs][0:3, 3] = (T_0to1[bs][0:3, 3] / torch.linalg.norm(T_0to1[bs][0:3, 3]))
         
-        return T_0to1
+        return T_0to1, feat_c0, feat_c1
 
     def load_state_dict(self, state_dict, *args, **kwargs):
         for k in list(state_dict.keys()):

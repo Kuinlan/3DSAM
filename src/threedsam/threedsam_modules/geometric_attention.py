@@ -5,7 +5,7 @@ from kornia import create_meshgrid
 
 from ..utils.geometry import get_epipolar_line_std, get_scaled_K
 from .transformer import RoPEPositionEncodingSine
-from src.threedsam.threedsam_modules.linear_attention import Attention
+from src.threedsam.threedsam_modules.attention import Attention
 
 class EpipolarAttention(nn.Module):
     def __init__(self, nhead=8, dim=256, area_width=10):
