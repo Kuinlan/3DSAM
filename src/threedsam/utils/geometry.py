@@ -46,7 +46,6 @@ def estimate_pose_np(kpts0, kpts1, K0, K1, thresh=0.5, conf=0.99999):
 
 @torch.no_grad()
 def get_scaled_K(K: torch.Tensor, scale):
-    print(K)
     K = K.clone()
     if K.dim() == 2:
         K[:2, :] = K[:2, :] / scale

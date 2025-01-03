@@ -3,6 +3,7 @@ import torch.nn as nn
 from einops.einops import rearrange
 
 from ..utils.anchor_sample import get_anchor
+from src.threedsam.utils.geometry import get_point_cloud
 
 INF = 1e9
 
@@ -21,62 +22,31 @@ def l1_norm(tensor: torch.Tensor, dim: int):
 
 class StructureExtractor(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self):
         super().__init__()
-        self.train_anchor_num = config['anchor_num']    # 32
-        self.train_anchor_thr = config['anchor_thr']    # 0.5
-        self.border_rm = config['border_rm']    # 2
-        self.dim_color = config['d_color']    # 256
         
-    def forward(self, match_mask, data):
-        """
-        Args:
-            match_mask (torch.Tensor): [N, L, S]
-            data (dict): with keys 
-                [pts_3d0 (torch.Tensor): [N, L, 3]
-                 pts_3d1 (torch.Tensor): [N, L, 3]]
-        Update:
-            data (dict): {
-                epipolar_info0 (dict)
-                epipolar_info1 (dict)
-            }
-        Returns:
-            m_struct0 (torch.Tensor): [N, C, H, W]
-            m_struct1 (torch.Tensor): [N, C, H, W]
-        """
-        N, L, S = match_mask.shape
+    def forward(self, anc_i_ids, anc_j_ids, T_0to1, data):
         
-        non_skip_ids = data['non_skip_ids']
-        conf_matrix = data['conf_matrix']
+        N = data['rel_depth0'].shape[0]
+        H, W = data['hw0_c']
         scale = data['hw0_i'][0] / data['hw0_c'][0]  # 8
         epipolar_info0 = dict(hw0_c = data['hw0_c'],
                              hw1_c = data['hw1_c'], 
-                             K0 = data['K0'][non_skip_ids], 
-                             K1 = data['K1'][non_skip_ids],
+                             K0 = data['K0'], 
+                             K1 = data['K1'],
                              scale = scale)
 
         epipolar_info1 = dict(hw0_c = data['hw1_c'],
                              hw1_c = data['hw0_c'],
-                             K0 = data['K1'][non_skip_ids], 
-                             K1 = data['K0'][non_skip_ids],
-                             scale = scale)
+                             K0 = data['K1'], 
+                             K1 = data['K0'],
+                             scale = data['hw1_i'][0] / data['hw1_c'][0])
 
-        pts_3d0 = data['pts_3d0'][non_skip_ids]  # [N, L, 3]
-        pts_3d1 = data['pts_3d1'][non_skip_ids] 
+        rel_depth0 = data['rel_depth0'] 
+        rel_depth1 = data['rel_depth1'] 
         
-        # 1. get coarse match result
-        mask_v, all_j_ids = match_mask.max(dim=2)
-        b_ids, i_ids = torch.where(mask_v)
-        j_ids = all_j_ids[b_ids, i_ids]
-        mconf = conf_matrix[b_ids, i_ids, j_ids]
-
-        # 2. get anchor points and estimate relative pose   
-        anchor_i_ids, anchor_j_ids, R, t = get_anchor(
-            b_ids, i_ids, j_ids, mconf,
-            self.train_anchor_num, self.training, data
-        )  # [N, ANCHOR_NUM, 2]
-        
-        epipolar_info0['R'] = R  # [N, 3, 3]
+        R, t = T_0to1[:, :3, :3], T_0to1[:, :3, [3]]  # [N, 3, 3], [N, 3, 1]
+        epipolar_info0['R'] = R # [N, 3, 3]
         epipolar_info0['t'] = t  # [N, 3, 1]
 
         epipolar_info1['R'] = R.transpose(1, 2)
@@ -85,13 +55,15 @@ class StructureExtractor(nn.Module):
         data.update(epipolar_info0 = epipolar_info0,
                     epipolar_info1 = epipolar_info1)
 
-        # 3. compute 3D relative position to anchor points
+        # 3. compute 3D strucure info 
+        pts_3d0 = get_point_cloud(rel_depth0, data['K0'], scale=scale)  # [N, L, 3]
+        pts_3d1 = get_point_cloud(rel_depth1, data['K1'], scale=scale)
         pts_3d0 = (R @ pts_3d0.transpose(1, 2) + t).transpose(1, 2)  # align point cloud
-        anchor_pts0 = pts_3d0[torch.arange(N).unsqueeze(1), anchor_i_ids, :]  # [N, ANCHOR_NUM, 3] - <x, y, z> 
-        anchor_pts1 = pts_3d1[torch.arange(N).unsqueeze(1), anchor_j_ids, :]
+        anc_pts_3d0 = torch.gather(pts_3d0, dim=1, index=anc_i_ids[..., None].repeat(1, 1, 3))  # [N, num_anc, 3]
+        anc_pts_3d1 = torch.gather(pts_3d1, dim=1, index=anc_j_ids[..., None].repeat(1, 1, 3))
 
-        m_struct0 = pts_3d0.unsqueeze(dim=2) - anchor_pts0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
-        m_struct1 = pts_3d1.unsqueeze(dim=2) - anchor_pts1.unsqueeze(dim=1)
+        m_struct0 = pts_3d0.unsqueeze(dim=2) - anc_pts_3d0.unsqueeze(dim=1)  # [N, L, ANCHOR_NUM, 3]
+        m_struct1 = pts_3d1.unsqueeze(dim=2) - anc_pts_3d1.unsqueeze(dim=1)
 
         distance0 = m_struct0.square().sum(dim=-1, keepdim=True).sqrt()  # [N, L, ANCHOR_NUM, 1]
         distance1 = m_struct1.square().sum(dim=-1, keepdim=True).sqrt()  
@@ -99,58 +71,7 @@ class StructureExtractor(nn.Module):
         m_struct0 = l1_norm(torch.cat([m_struct0, distance0], dim=-1), dim=2) # [N, L, ANCHOR_NUM, 4]
         m_struct1 = l1_norm(torch.cat([m_struct1, distance1], dim=-1), dim=2) 
 
-        m_struct0 = rearrange(m_struct0, 'n (h w) c d -> n (d c) h w', 
-                              h=data['hw0_c'][0], w=data['hw0_c'][1])
-        m_struct1 = rearrange(m_struct1, 'n (h w) c d -> n (d c) h w', 
-                              h=data['hw1_c'][0], w=data['hw1_c'][1])
+        m_struct0 = rearrange(m_struct0, 'n l c d -> n l (d c)')
+        m_struct1 = rearrange(m_struct1, 'n l c d -> n l (d c)')
 
         return m_struct0, m_struct1
-
-    
-class PoseExtractor(nn.Module):
-
-    def __init__(self, config):
-        super(PoseExtractor, self).__init__()
-        self.train_anchor_num = config['anchor_num']    # 32
-        self.train_anchor_thr = config['anchor_thr']    # 0.5
-        self.border_rm = config['border_rm']    # 2
-        self.dim_color = config['d_color']    # 256
-        
-    def forward(self, match_mask, data):
-        """
-        Args:
-            match_mask (torch.Tensor): [N, L, S]
-            data (dict): with keys 
-                [pts_3d0 (torch.Tensor): [N, L, 3]
-                 pts_3d1 (torch.Tensor): [N, L, 3]]
-        Update:
-            data (dict): {
-                epipolar_info0 (dict)
-                epipolar_info1 (dict)
-            }
-        Returns:
-            m_struct0 (torch.Tensor): [N, C, H, W]
-            m_struct1 (torch.Tensor): [N, C, H, W]
-        """
-        N, L, S = match_mask.shape
-        
-        conf_matrix = data['conf_matrix']
-
-        # 1. get coarse match result
-        mask_v, all_j_ids = match_mask.max(dim=2)
-        b_ids, i_ids = torch.where(mask_v)
-        j_ids = all_j_ids[b_ids, i_ids]
-        mconf = conf_matrix[b_ids, i_ids, j_ids]
-
-        # 2. get anchor points and estimate relative pose   
-        anchor_i_ids, anchor_j_ids, R, t = get_anchor(
-            b_ids, i_ids, j_ids, mconf,
-            self.train_anchor_num, self.training, data
-        )  # [N, ANCHOR_NUM, 2]
-        
-        epipolar_info0['R'] = R  # [N, 3, 3]
-        epipolar_info0['t'] = t  # [N, 3, 1]
-
-
-        data.update(epipolar_info0 = epipolar_info0,
-                    epipolar_info1 = epipolar_info1)

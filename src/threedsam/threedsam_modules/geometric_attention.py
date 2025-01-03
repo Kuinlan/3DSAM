@@ -4,7 +4,7 @@ from einops.einops import rearrange
 from kornia import create_meshgrid
 
 from ..utils.geometry import get_epipolar_line_std, get_scaled_K
-from .transformer import RoPEPositionEncodingSine
+from ..utils.position_encoding import RoPEPositionEncodingSine
 from src.threedsam.threedsam_modules.linear_attention import Attention
 
 class EpipolarAttention(nn.Module):
@@ -14,7 +14,7 @@ class EpipolarAttention(nn.Module):
         self.dim = dim
         self.area_width = area_width
         
-    def forward(self, query, key, value, geometry_info, q_mask=None, kv_mask=None):
+    def forward(self, query, key, value, geometry_info=None, q_mask=None, kv_mask=None):
         """ 
         Args:
             queries: [N, L, H, D]
@@ -25,12 +25,10 @@ class EpipolarAttention(nn.Module):
         Returns:
             queried_values: (N, L, H, D)
         """
-        query, key, value = map(lambda x: rearrange(x, 'n h w (nhead d) -> n (h w) nhead d', nhead=self.nhead, d=self.dim), [query, key, value])
-
         QK = torch.einsum("nlhd,nshd->nlsh", query, key)
         
         # masking
-        attention_mask, sim_matrix_mask = self.get_mask(geometry_info)  # [N, L, S]
+        attention_mask = self.get_mask(geometry_info)  # [N, L, S]
         if kv_mask is not None:
             qk_mask = attention_mask * (q_mask[:, :, None, None] * kv_mask[:, None, :, None])
         else:
@@ -44,11 +42,11 @@ class EpipolarAttention(nn.Module):
 
         out = torch.einsum("nlsh,nshd->nlhd", A, value)
 
-        return out, sim_matrix_mask
+        return out.contiguous()
     
     @torch.no_grad()
     def get_mask(self, epipolar_info):
-        agg_scale = epipolar_info['agg_scale']
+        # agg_scale = epipolar_info['agg_scale'] if 'agg_scale' in epipolar_info.keys() else 1
         scale = epipolar_info['scale'] 
 
         R = epipolar_info['R']
@@ -67,17 +65,17 @@ class EpipolarAttention(nn.Module):
         self.coord0 = create_meshgrid(H0, W0, False, K0.device).flatten(1, 2)  # [1, L, 2] - <x, y>
         self.coord1 = create_meshgrid(H1, W1, False, K1.device).flatten(1, 2)  # [1, L, 2] - <x, y>
         self.max_candidate_num = max(H1, W1) * self.area_width
-        sim_matrix_mask = self.get_epipolar_mask(R, t, K0, K1, self.area_width)  # (N, L, C)
+        attention_mask = self.get_epipolar_mask(R, t, K0, K1, self.area_width)  # (N, L, C)
 
-        scale = scale * agg_scale
-        H0, W0, H1, W1 = map(lambda x: x // agg_scale, [H0, W0, H1, W1])
-        self.coord0 = create_meshgrid(H0, W0, False, K0.device).flatten(1, 2)  # [1, L, 2] - <x, y>
-        self.coord1 = create_meshgrid(H1, W1, False, K1.device).flatten(1, 2)  # [1, L, 2] - <x, y>
-        K0 = get_scaled_K(K0, scale)
-        K1 = get_scaled_K(K1, scale)
-        attention_mask = self.get_epipolar_mask(R, t, K0, K1, self.area_width // agg_scale)
+        # scale = scale * agg_scale
+        # H0, W0, H1, W1 = map(lambda x: x // agg_scale, [H0, W0, H1, W1])
+        # self.coord0 = create_meshgrid(H0, W0, False, K0.device).flatten(1, 2)  # [1, L, 2] - <x, y>
+        # self.coord1 = create_meshgrid(H1, W1, False, K1.device).flatten(1, 2)  # [1, L, 2] - <x, y>
+        # K0 = get_scaled_K(K0, scale)
+        # K1 = get_scaled_K(K1, scale)
+        # attention_mask = self.get_epipolar_mask(R, t, K0, K1, self.area_width // agg_scale)
 
-        return attention_mask, sim_matrix_mask
+        return attention_mask
 
     @torch.no_grad()
     def get_epipolar_mask(self, R, t, K0, K1, area_width = 10):
@@ -143,7 +141,6 @@ class EpipolarAttention(nn.Module):
 
         return within  
 
-
 class GA_EncoderLayer(nn.Module):
     def __init__(self, config):
         super(GA_EncoderLayer, self).__init__()
@@ -152,9 +149,6 @@ class GA_EncoderLayer(nn.Module):
         self.fp32 = not (config['mp'] or config['half'])
         self.nhead = config['nhead']
         self.dim = d_model // self.nhead
-        self.agg_size0, self.agg_size1 = config['agg_size0'], config['agg_size1']
-        self.no_flash = config['no_flash']
-        self.rope = config['rope']
         self.linear = config['linear_attention']
 
         # aggregate and position encoding

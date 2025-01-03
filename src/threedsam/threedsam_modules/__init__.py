@@ -1,5 +1,5 @@
 from .transformer import LocalFeatureTransformer, DepthGuidedEncoder
 from .iterative_optimization import IterativeOptimization
 from .fine_preprocess import FinePreprocess
-from .depthnet import CameraAwareDepthNet
+from .structure_extract import StructureExtractor
 from .pos_encoding import PositionalEncoding3D

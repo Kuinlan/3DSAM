@@ -11,7 +11,6 @@ from matplotlib import pyplot as plt
 from src.da.depth_anything_v2.depth_anything_v2.dpt import DepthAnythingV2
 
 from src.threedsam import ThreeDSAM
-from src.threedsam.utils.geometry import get_point_cloud
 from src.threedsam.utils.supervision import compute_supervision_coarse, compute_supervision_fine
 from src.losses.threedsam_loss import ThreeDSAMLoss
 from src.optimizers import build_optimizer, build_scheduler
@@ -125,13 +124,13 @@ class PL_3DSAM(pl.LightningModule):
             compute_supervision_coarse(batch, self.config)
         
         with self.profiler.profile("ThreeDSAM"):
-            de_ids0, de_ids1, de_map0, de_map1 = self.matcher(batch)
+            self.matcher(batch)
 
         with self.profiler.profile("Compute fine supervision"):
             compute_supervision_fine(batch, self.config)
             
         with self.profiler.profile("Compute losses"):
-            self.loss(batch, de_ids0, de_ids1, de_map0, de_map1)
+            self.loss(batch)
     
     def _compute_metrics(self, batch):
         with self.profiler.profile("Copmute metrics"):

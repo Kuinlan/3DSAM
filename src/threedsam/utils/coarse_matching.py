@@ -161,6 +161,8 @@ def get_coarse_match(conf_matrix, config, is_training, data, pick_sample=True):
     coarse_matches.update({
         'gt_mask': mconf == 0,
         'm_bids': b_ids[mconf != 0],  # mconf == 0 => gt matches
+        'm_jids': j_ids[mconf != 0],  
+        'm_iids': i_ids[mconf != 0],  
         'mkpts0_c': mkpts0_c[mconf != 0],
         'mkpts1_c': mkpts1_c[mconf != 0],
         'mconf': mconf[mconf != 0]

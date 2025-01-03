@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+import numpy as np
 
 
 class PositionEncodingSine(nn.Module):
@@ -114,3 +115,39 @@ def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
     posemb = torch.cat((pos_y, pos_x, pos_z), dim=-1)   # (N_query, num_feats * 3)
 
     return posemb
+    
+def generate_fourier_features(pos, num_bands=None, max_resolution=None, 
+                            concat_pos=True, sine_only=False, freq_sampling='linear'):
+    """Generate fourier features from a given set of positions and frequencies"""
+    b, l = pos.shape[:2]
+    device = pos.device
+
+    if freq_sampling == 'linear':
+        min_freq = 1.0
+        freq_bands = torch.stack(  
+            [torch.linspace(start=min_freq, end=res / 2, steps=num_bands, device=device)
+                for res in max_resolution], dim=0
+        )  # [128, 16]
+    elif freq_sampling == 'log':
+        freq_bands = torch.stack(
+            [2. ** torch.linspace(0., max_res, steps=num_bands)
+                for max_res in max_resolution], dim=0
+        ).to(pos.device)
+    else:
+        raise ValueError('Invalid freq_sampling')
+
+    # [l, 128, 1] * [1, 128, 16] -> [l, 128, 16] -> [b, l, 128, 16] -> [b, l, 256 * 8]
+    per_pos_features = torch.stack([pos[i, :, :][:, :, None] * freq_bands[None, :, :] for i in range(b)], 0)
+    per_pos_features = per_pos_features.reshape(b, l, -1)  # [b, l, 256 * 8]
+
+    if sine_only:
+        per_pos_features = torch.sin(np.pi * per_pos_features)
+    else:
+        per_pos_features = torch.cat(
+            [torch.sin(np.pi * per_pos_features), torch.cos(np.pi * per_pos_features)], dim=-1
+        )  # [1, n, 48 * 2]
+
+    if concat_pos:
+        per_pos_features = torch.cat([pos, per_pos_features], dim=-1)
+
+    return per_pos_features

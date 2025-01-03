@@ -2,9 +2,9 @@ import copy
 import torch
 import torch.nn as nn
 from einops.einops import rearrange
-from flash_attn import flash_attn_varlen_func, flash_attn_func
 
 from .linear_attention import Attention, LinearAttention, FullAttention
+from .geometric_attention import EpipolarAttention
 from ..utils.position_encoding import RoPEPositionEncodingSine
 
 
@@ -267,7 +267,7 @@ class LocalFeatureTransformer(nn.Module):
 
 class TransformerEncoderLayerGeneral(nn.Module):
     
-    def __init__(self, d_model, nhead):
+    def __init__(self, d_model, nhead, epipolar=False):
         super(TransformerEncoderLayerGeneral, self).__init__()
         self.dim = d_model // nhead
         self.nhead = nhead
@@ -276,7 +276,11 @@ class TransformerEncoderLayerGeneral(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
         
-        self.attention = LinearAttention()
+        self.epipolar = epipolar
+        if epipolar is not False:
+            self.attention = EpipolarAttention()
+        else: 
+            self.attention = LinearAttention()
         self.merge = nn.Linear(d_model, d_model, bias=False)
         
         self.FFN = nn.Sequential(
@@ -289,7 +293,7 @@ class TransformerEncoderLayerGeneral(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         
-    def forward(self, x, source, query_embed=None, key_embed=None, x_mask=None, source_mask=None):
+    def forward(self, x, source, query_embed=None, key_embed=None, x_mask=None, source_mask=None, geometry_info=None):
         """
         Args:
             x (torch.Tensor): [N, L, C]
@@ -311,7 +315,10 @@ class TransformerEncoderLayerGeneral(nn.Module):
         key = self.k_proj(key).view(bs, -1, self.nhead, self.dim) # [N, S, (H, D)]
         value = self.v_proj(value).view(bs, -1, self.nhead, self.dim)
         
-        message = self.attention(query, key, value, q_mask=x_mask, kv_mask=source_mask)  # temperature = 1 / sqrt(dim) 
+        if self.epipolar:
+            message = self.attention(query, key, value, geometry_info=geometry_info, q_mask=x_mask, kv_mask=source_mask)  # temperature = 1 / sqrt(dim) 
+        else:
+            message = self.attention(query, key, value, q_mask=x_mask, kv_mask=source_mask)  # temperature = 1 / sqrt(dim) 
         message = self.merge(message.view(bs, -1, self.nhead * self.dim)) # [N, L, C]
         message = self.norm1(message)
         
@@ -331,14 +338,21 @@ class DepthGuidedEncoder(nn.Module):
         self.nhead = config['nhead']
         self.n_visual_layers = config['num_visual_layers']
         self.n_depth_layers = config['num_depth_layers']
+        self.epipolar = config['epipolar']
+
         # setup encoder layers
         encoder_layer = TransformerEncoderLayerGeneral(self.d_model, self.nhead)
         self.depth_layers = nn.ModuleList(
             [copy.deepcopy(encoder_layer) for _ in range(self.n_depth_layers)])
         self.selfAttn_layers = nn.ModuleList(
             [copy.deepcopy(encoder_layer) for _ in range(self.n_visual_layers)])
-        self.crossAttn_layers = nn.ModuleList(
-            [copy.deepcopy(encoder_layer) for _ in range(self.n_visual_layers)])
+        if config['epipolar']:
+            cross_encoder_layer = TransformerEncoderLayerGeneral(self.d_model, self.nhead, epipolar=True)
+            self.crossAttn_layers = nn.ModuleList(
+                [copy.deepcopy(cross_encoder_layer) for _ in range(self.n_visual_layers)])
+        else:
+            self.crossAttn_layers = nn.ModuleList(
+                [copy.deepcopy(encoder_layer) for _ in range(self.n_visual_layers)])
         self._reset_parameters()
         
     def _reset_parameters(self):
@@ -346,7 +360,7 @@ class DepthGuidedEncoder(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
     
-    def forward(self, feat0, feat1, pos_embed0, pos_embed1, depth_embed0, depth_embed1, mask0=None, mask1=None, ):
+    def forward(self, feat0, feat1, pos_embed0, pos_embed1, depth_embed0, depth_embed1, mask0=None, mask1=None, epipolar_info0=None, epipolar_info1=None):
         """Transform visual feature together with depth features
         Args:
             feat0 (torch.Tensor): [N, L, C]
@@ -365,9 +379,14 @@ class DepthGuidedEncoder(nn.Module):
             feat0 = selfAttn_layer(feat0, feat0, pos_embed0, pos_embed0, mask0, mask0)
             feat1 = selfAttn_layer(feat1, feat1, pos_embed1, pos_embed1, mask1, mask1)
             # Finally cross attention between two image features
-            feat0_after = crossAttn_layer(feat0, feat1, pos_embed0, pos_embed1, mask0, mask1)
-            feat1_after = crossAttn_layer(feat1, feat0, pos_embed1, pos_embed0, mask1, mask0)
+            if self.epipolar:
+                feat0_after = crossAttn_layer(feat0, feat1, pos_embed0, pos_embed1, mask0, mask1, geometry_info=epipolar_info0)
+                feat1_after = crossAttn_layer(feat1, feat0, pos_embed1, pos_embed0, mask1, mask0, geometry_info=epipolar_info1)
+            else:
+                feat0_after = crossAttn_layer(feat0, feat1, pos_embed0, pos_embed1, mask0, mask1)
+                feat1_after = crossAttn_layer(feat1, feat0, pos_embed1, pos_embed0, mask1, mask0)
             # assign new value
             feat0 = feat0_after
             feat1 = feat1_after
+
         return feat0, feat1

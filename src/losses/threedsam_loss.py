@@ -223,7 +223,7 @@ class ThreeDSAMLoss(nn.Module):
             c_weight = None
         return c_weight
 
-    def forward(self, data, depth_logits0, depth_logits1, depth_map0, depth_map1):
+    def forward(self, data, depth_logits0=None, depth_logits1=None, depth_map0=None, depth_map1=None):
         """
         Update:
             data (dict): update{
