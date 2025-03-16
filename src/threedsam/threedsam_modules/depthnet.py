@@ -211,7 +211,7 @@ class SELikeModule(nn.Module):
             nn.Linear(intrinsic_channel, feat_channel),
             nn.Sigmoid())
 
-    def forward(self, x: torch.Tensor, depth_embed, intrinsic):
+    def forward(self, x: torch.Tensor, depth_embed):
         """
         Args:
             x: (B, C, H, W)
@@ -223,9 +223,12 @@ class SELikeModule(nn.Module):
         """
         b, c, _, _ = x.shape
         x = self.input_conv(x)  # (B, C, H, W)
+        if depth_embed is None:
 
-        y = self.fc(intrinsic).view(b, c, 1, 1)
-        return x * y.expand_as(x) * depth_embed 
+            return x
+        else:
+
+            return x * depth_embed 
 
 
 class ConvModule(nn.Module):
@@ -357,7 +360,7 @@ class CameraAwareDepthNet(nn.Module):
             context1: (B, C_context, H, W)
         """
         B, _, H, W = feat0.shape
-        rel_depth0 = data['rel_depth0']  # (B, H, W)
+        rel_depth0 = data['rel_depth0']  # (B, H, WC
         rel_depth1 = data['rel_depth1']
 
         intrinsics0 = data['K0'][..., :2, :].contiguous()   # 6
@@ -377,14 +380,34 @@ class CameraAwareDepthNet(nn.Module):
         context0 = self.context_conv(feat0)  # (B*N_view, C_context, H, W)
         context1 = self.context_conv(feat1) 
 
-        depth0 = self.se(feat0, depth_embed0, intrinsics0)  # (B, C_mid, H, W)
-        depth1 = self.se(feat1, depth_embed1, intrinsics1)  # (B, C_mid, H, W)
+        depth0 = self.se(feat0, depth_embed0)  # (B, C_mid, H, W)
+        depth1 = self.se(feat1, depth_embed1)  # (B, C_mid, H, W)
+        # depth0 = self.se(feat0, None)  # (B, C_mid, H, W)
+        # depth1 = self.se(feat1, None)  # (B, C_mid, H, W)
 
         if not self.with_pgd:
             depth_stem0 = self.depth_stem(depth0)
             depth_stem1 = self.depth_stem(depth1)
             depth_prob0 = self.depth_prob_conv(depth_stem0)  # (B, D, H, W)
             depth_prob1 = self.depth_prob_conv(depth_stem1) 
+            self.depth_score0 = depth_prob0   # 未经过softmax
+            depth_prob0 = depth_prob0.permute(0, 2, 3, 1).contiguous().view(-1, self.depth_num)   # (B, H, W, D) --> (B*H*W, D)
+            depth_prob_val0 = self.integral(depth_prob0)      # (B*H*W, )
+            depth_map_pred0 = depth_prob_val0
+
+            self.depth_score1 = depth_prob1 
+            depth_prob1 = depth_prob1.permute(0, 2, 3, 1).contiguous().view(-1, self.depth_num)   # (B, H, W, D) --> (B*H*W, D)
+            depth_prob_val1 = self.integral(depth_prob1)      # (B*H*W, )
+            depth_map_pred1 = depth_prob_val1
+            
+            depth_map_pred0 = depth_map_pred0.view(B, H, W)
+            depth_map_pred1 = depth_map_pred1.view(B, H, W)
+            
+            data.update({
+                'depth_map0': depth_map_pred0,
+                'depth_map1': depth_map_pred1
+            })
+
             return depth_prob0, depth_prob1, context0, context1
         else:
             depth_stem0 = self.depth_stem(depth0)

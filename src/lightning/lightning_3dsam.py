@@ -8,6 +8,7 @@ import numpy as np
 import pytorch_lightning as pl
 from matplotlib import pyplot as plt
 
+# 加入 Depth Anything V2
 from src.da.depth_anything_v2.depth_anything_v2.dpt import DepthAnythingV2
 
 from src.threedsam import ThreeDSAM
@@ -18,10 +19,11 @@ from src.optimizers import build_optimizer, build_scheduler
 from src.utils.metrics import (
     compute_symmetrical_epipolar_errors,
     compute_pose_errors,
+    compute_depth_errors,
     aggregate_metrics
 )
 
-from src.utils.plotting import make_matching_figures
+from src.utils.plotting import make_matching_figures, make_pos_embedding_similarity_map
 from src.utils.comm import gather, all_gather
 from src.utils.misc import lower_config, flattenList
 from src.utils.profiler import PassThroughProfiler
@@ -42,6 +44,7 @@ class PL_3DSAM(pl.LightningModule):
 
         # Depth Anything v2 initialization
         self.depth_anything = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
+        # self.depth_anything = DepthAnythingV2(encoder='vitl')
         self.depth_anything.load_state_dict(torch.load('weights/depth_anyting_v2/depth_anything_v2_vits.pth', map_location='cpu'))
         self.depth_anything.eval()
 
@@ -85,9 +88,9 @@ class PL_3DSAM(pl.LightningModule):
                 state_dict_partial.update({k: state_dict[k]})
 
         self.matcher.load_state_dict(state_dict_partial, strict=False)
-        # for name, param in self.matcher.named_parameters():
-        #     if name in state_dict_partial.keys():
-        #         param.requires_grad=False
+        for name, param in self.matcher.named_parameters():
+            if name in state_dict_partial.keys():
+                param.requires_grad=False
 
     def configure_optimizers(self):
         # FIXME: The scheduler did not work properly when `--resume_from_checkpoint`
@@ -118,9 +121,6 @@ class PL_3DSAM(pl.LightningModule):
         optimizer.zero_grad()
     
     def _trainval_inference(self, batch):
-        with self.profiler.profile("get 3D structure info from MDE model"):
-            self._update_relative_depth(batch)
-
         with self.profiler.profile("Compute coarse supervision"):
             compute_supervision_coarse(batch, self.config)
         
@@ -137,6 +137,8 @@ class PL_3DSAM(pl.LightningModule):
         with self.profiler.profile("Copmute metrics"):
             compute_symmetrical_epipolar_errors(batch)  # compute epi_errs for each match
             compute_pose_errors(batch, self.config)  # compute R_errs, t_errs, pose_errs for each pair
+            compute_depth_errors(batch)
+            # compute_depth_errors_DA(batch)
 
             rel_pair_names = list(zip(*batch['pair_names']))
             bs = batch['image0'].size(0)
@@ -146,7 +148,20 @@ class PL_3DSAM(pl.LightningModule):
                 'epi_errs': [batch['epi_errs'][batch['m_bids'] == b].cpu().numpy() for b in range(bs)],
                 'R_errs': batch['R_errs'],
                 't_errs': batch['t_errs'],
-                'inliers': batch['inliers']}
+                'inliers': batch['inliers'],
+                'mse': batch['mse'],
+                'mae': batch['mae'],
+                'rmse': batch['rmse'],
+                'rel_error': batch['rel_error'],
+                'ssim': batch['ssim'],
+                'vertex_acc': batch['vertex_acc'],}
+                # 'mse_DA': batch['mse_DA'],
+                # 'mae_DA': batch['mae_DA'],
+                # 'rmse_DA': batch['rmse_DA'],
+                # 'rel_error_DA': batch['rel_error_DA'],
+                # 'ssim_DA': batch['ssim_DA'],
+                # 'vertex_acc_DA': batch['vertex_acc_DA'],}
+
             ret_dict = {'metrics': metrics}
         return ret_dict, rel_pair_names
 
@@ -261,13 +276,16 @@ class PL_3DSAM(pl.LightningModule):
             self.log(f'auc@{thr}', torch.tensor(np.mean(multi_val_metrics[f'auc@{thr}'])))  # ckpt monitors on this
 
     def test_step(self, batch, batch_idx):
-        with self.profiler.profile("Depth Anything v2 estimation."):
-            self._update_relative_depth(batch)
-            
+        # self._update_relative_depth(batch)
+        # compute_supervision_coarse(batch, self.config)
         with self.profiler.profile("ThreeDSAM"):
             self.matcher(batch)
 
         ret_dict, rel_pair_names = self._compute_metrics(batch)
+        # if batch_idx % 10 == 0:
+        # make_pos_embedding_similarity_map(batch, path=self.config.TRAINER.PLOT_PATH, batch_idx=batch_idx)
+            # figures = make_matching_figures(batch, self.config, mode=self.config.TRAINER.PLOT_MODE, 
+            #                                 path=self.config.TRAINER.PLOT_PATH, batch_idx=batch_idx, require_depth=self.config.TRAINER.REQUIRE_DEPTH)
 
         with self.profiler.profile("dump_results"):
             if self.dump_dir is not None:

@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 from einops.einops import rearrange
-from flash_attn import flash_attn_varlen_func, flash_attn_func
+# from flash_attn import flash_attn_varlen_func, flash_attn_func
 
 from .linear_attention import Attention, LinearAttention, FullAttention
 from ..utils.position_encoding import RoPEPositionEncodingSine
@@ -358,6 +358,7 @@ class DepthGuidedEncoder(nn.Module):
         """
         assert self.d_model == feat0.size(2), "the feature number of src and transformer must be equal"
         for depth_layer, selfAttn_layer, crossAttn_layer in zip(self.depth_layers, self.selfAttn_layers, self.crossAttn_layers):
+        # for selfAttn_layer, crossAttn_layer in zip(self.selfAttn_layers, self.crossAttn_layers):
             # Fetch depth information into features
             feat0 = depth_layer(feat0, depth_embed0, None, None, mask0, mask0)
             feat1 = depth_layer(feat1, depth_embed1, None, None, mask1, mask1)
@@ -370,4 +371,5 @@ class DepthGuidedEncoder(nn.Module):
             # assign new value
             feat0 = feat0_after
             feat1 = feat1_after
+
         return feat0, feat1

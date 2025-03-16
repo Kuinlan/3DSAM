@@ -11,8 +11,10 @@ from numpy.linalg import inv
 from src.da.depth_anything_v2.depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet
 from src.utils.dataset import (
     read_scannet,
+    read_scannet_rotated,
     read_scannet_gray,
     read_scannet_depth,
+    read_scannet_depth_rotated,
     read_scannet_pose,
     read_scannet_intrinsic
 )
@@ -120,7 +122,8 @@ class ScanNetDataset(utils.data.Dataset):
             depth0 = read_scannet_depth(osp.join(self.root_dir, scene_name, 'depth', f'{stem_name_0}.png'))
             depth1 = read_scannet_depth(osp.join(self.root_dir, scene_name, 'depth', f'{stem_name_1}.png'))
         else:
-            depth0 = depth1 = torch.tensor([])
+            depth0 = read_scannet_depth(osp.join(self.root_dir, scene_name, 'depth', f'{stem_name_0}.png'))
+            depth1 = read_scannet_depth(osp.join(self.root_dir, scene_name, 'depth', f'{stem_name_1}.png'))
 
         # read the intrinsic of depthmap
         K_0 = K_1 = torch.tensor(self.intrinsics[scene_name].copy(), dtype=torch.float).reshape(3, 3)
@@ -129,6 +132,14 @@ class ScanNetDataset(utils.data.Dataset):
         T_0to1 = torch.tensor(self._compute_rel_pose(scene_name, stem_name_0, stem_name_1),
                               dtype=torch.float32)
         T_1to0 = T_0to1.inverse()
+        # # 修改相对位姿矩阵
+        # # 旋转矩阵
+        # R = torch.tensor([[np.cos(np.pi/4), -np.sin(np.pi/4), 0], 
+        #               [np.sin(np.pi/4), np.cos(np.pi/4), 0],
+        #               [0, 0, 1]], dtype=torch.float32)
+        # # 将旋转矩阵应用于 T_1to0 的旋转部分
+        # T_1to0[:3, :3] = R @ T_1to0[:3, :3]
+        # T_0to1 = T_1to0.inverse()
         data = {
             'image_color0': image_color0,  # (h, w, 3)
             'image_color1': image_color1,

@@ -14,11 +14,12 @@ data_cfg_path="configs/data/megadepth_trainval_${TRAIN_IMG_SIZE}.py"
 main_cfg_path="configs/loftr/outdoor/loftr_ds_dense.py"
 
 n_nodes=1
-n_gpus_per_node=4
+n_gpus_per_node=0,1,3,4
 torch_num_workers=4
-batch_size=1
+batch_size=2
 pin_memory=true
 exp_name="outdoor-ds-${TRAIN_IMG_SIZE}-bs=$(($n_gpus_per_node * $n_nodes * $batch_size))"
+ckpt_path="logs/tb_logs/outdoor-ds-640-bs=8/version_7/checkpoints/last.ckpt"
 
 python -u ./train.py \
     ${data_cfg_path} \
@@ -26,6 +27,7 @@ python -u ./train.py \
     --exp_name=${exp_name} \
     --gpus=${n_gpus_per_node} --num_nodes=${n_nodes} --accelerator="ddp" \
     --batch_size=${batch_size} --num_workers=${torch_num_workers} --pin_memory=${pin_memory} \
+    --ckpt_path=${ckpt_path} \
     --check_val_every_n_epoch=1 \
     --log_every_n_steps=1 \
     --flush_logs_every_n_steps=1 \

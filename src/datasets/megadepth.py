@@ -2,11 +2,37 @@ import os.path as osp
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.nn.functional import interpolate
+import cv2
 from torch.utils.data import Dataset
 from loguru import logger
 
 from src.utils.dataset import read_megadepth_gray, read_megadepth_depth
+from src.da.depth_anything_v2.depth_anything_v2.util.transform import Resize, NormalizeImage, PrepareForNet 
+from torchvision.transforms import Compose
 
+# preprocess for depth anything inference
+def image2tensor(image, input_size=518):        
+    transform = Compose([
+        Resize(
+            width=input_size,
+            height=input_size,
+            resize_target=False,
+            keep_aspect_ratio=True,
+            ensure_multiple_of=14,
+            resize_method='lower_bound',
+            image_interpolation_method=cv2.INTER_CUBIC,
+        ),
+        NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        PrepareForNet(),
+    ])
+    
+    h, w = image.shape[:2]
+    
+    image = transform({'image': image})['image']
+    image = torch.from_numpy(image)
+    
+    return image, (h, w)
 
 class MegaDepthDataset(Dataset):
     def __init__(self,
@@ -46,7 +72,7 @@ class MegaDepthDataset(Dataset):
             min_overlap_score = 0
         self.scene_info = np.load(npz_path, allow_pickle=True)
         self.pair_infos = self.scene_info['pair_infos'].copy()
-        del self.scene_info['pair_infos']
+        # del self.scene_info['pair_infos']
         self.pair_infos = [pair_info for pair_info in self.pair_infos if pair_info[1] > min_overlap_score]
 
         # parameters for image resizing, padding and depthmap padding
@@ -72,19 +98,24 @@ class MegaDepthDataset(Dataset):
         img_name1 = osp.join(self.root_dir, self.scene_info['image_paths'][idx1])
         
         # TODO: Support augmentation & handle seeds for each worker correctly.
-        image0, mask0, scale0 = read_megadepth_gray(
+        # scale = img_resize(640 or 840) / max(h, w)
+        image0, mask0, image_color0, scale0, valid_shape_c0 = read_megadepth_gray(
             img_name0, self.img_resize, self.df, self.img_padding, None)
             # np.random.choice([self.augment_fn, None], p=[0.5, 0.5]))
-        image1, mask1, scale1 = read_megadepth_gray(
+        image1, mask1, image_color1, scale1, valid_shape_c1 = read_megadepth_gray(
             img_name1, self.img_resize, self.df, self.img_padding, None)
             # np.random.choice([self.augment_fn, None], p=[0.5, 0.5]))
 
+        image_color0, (h0, w0) = image2tensor(image_color0)  # (518, 518) 
+        image_color1, (h1, w1) = image2tensor(image_color1) 
+         
+
         # read depth. shape: (h, w)
         if self.mode in ['train', 'val']:
-            depth0 = read_megadepth_depth(
-                osp.join(self.root_dir, self.scene_info['depth_paths'][idx0]), pad_to=self.depth_max_size)
-            depth1 = read_megadepth_depth(
-                osp.join(self.root_dir, self.scene_info['depth_paths'][idx1]), pad_to=self.depth_max_size)
+            depth0, gt_depth_map0 = read_megadepth_depth(
+                osp.join(self.root_dir, self.scene_info['depth_paths'][idx0]), valid_shape_c0, pad_to=self.depth_max_size)
+            depth1, gt_depth_map1 = read_megadepth_depth(
+                osp.join(self.root_dir, self.scene_info['depth_paths'][idx1]), valid_shape_c1, pad_to=self.depth_max_size)
         else:
             depth0 = depth1 = torch.tensor([])
 
@@ -99,10 +130,14 @@ class MegaDepthDataset(Dataset):
         T_1to0 = T_0to1.inverse()
 
         data = {
+            'image_color0': image_color0,  # (3, h, w)  (3, 640, 640)
+            'image_color1': image_color1,
             'image0': image0,  # (1, h, w)
-            'depth0': depth0,  # (h, w)
+            'depth0': depth0,  # (h, w)  megadepth: (2000, 2000)
+            'gt_depth_map0': gt_depth_map0,
             'image1': image1,
             'depth1': depth1,
+            'gt_depth_map1': gt_depth_map1,
             'T_0to1': T_0to1,  # (4, 4)
             'T_1to0': T_1to0,
             'K0': K_0,  # (3, 3)

@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import h5py
 import torch
+from torch.nn.functional import interpolate
 from numpy.linalg import inv
 
 
@@ -79,11 +80,11 @@ def pad_bottom_right(inp, pad_size, ret_mask=False):
             mask = np.zeros((pad_size, pad_size), dtype=bool)
             mask[:inp.shape[0], :inp.shape[1]] = True
     elif inp.ndim == 3:
-        padded = np.zeros((inp.shape[0], pad_size, pad_size), dtype=inp.dtype)
-        padded[:, :inp.shape[1], :inp.shape[2]] = inp
+        padded = np.zeros((pad_size, pad_size, inp.shape[-1]), dtype=inp.dtype)
+        padded[:inp.shape[0], :inp.shape[1], :] = inp
         if ret_mask:
-            mask = np.zeros((inp.shape[0], pad_size, pad_size), dtype=bool)
-            mask[:, :inp.shape[1], :inp.shape[2]] = True
+            mask = np.zeros((pad_size, pad_size, inp.shape[-1]), dtype=bool)
+            mask[:inp.shape[0], :inp.shape[1], :] = True
     else:
         raise NotImplementedError()
     return padded, mask
@@ -104,6 +105,8 @@ def read_megadepth_gray(path, resize=None, df=None, padding=False, augment_fn=No
     """
     # read image
     image = imread_gray(path, augment_fn, client=MEGADEPTH_CLIENT)
+    image_raw = cv2.imread(path, cv2.IMREAD_COLOR)
+    image_color = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
 
     # resize image
     w, h = image.shape[1], image.shape[0]
@@ -111,29 +114,44 @@ def read_megadepth_gray(path, resize=None, df=None, padding=False, augment_fn=No
     w_new, h_new = get_divisible_wh(w_new, h_new, df)
 
     image = cv2.resize(image, (w_new, h_new))
+    image_color = cv2.resize(image_color, (w_new, h_new))
     scale = torch.tensor([w/w_new, h/h_new], dtype=torch.float)
 
     if padding:  # padding
         pad_to = max(h_new, w_new)
         image, mask = pad_bottom_right(image, pad_to, ret_mask=True)
+        image_color, _ = pad_bottom_right(image_color, pad_to, ret_mask=False)
     else:
         mask = None
 
     image = torch.from_numpy(image).float()[None] / 255  # (h, w) -> (1, h, w) and normalized
     mask = torch.from_numpy(mask)
 
-    return image, mask, scale
+    return image, mask, image_color, scale, (int(h_new / df), int(w_new / df))
 
 
-def read_megadepth_depth(path, pad_to=None):
+def read_megadepth_depth(path, depthmap_size, pad_to=None):
     if str(path).startswith('s3://'):
-        depth = load_array_from_s3(path, MEGADEPTH_CLIENT, None, use_h5py=True)
+        depth_ori = load_array_from_s3(path, MEGADEPTH_CLIENT, None, use_h5py=True)
     else:
-        depth = np.array(h5py.File(path, 'r')['depth'])
+        depth_ori = np.array(h5py.File(path, 'r')['depth'])
     if pad_to is not None:
-        depth, _ = pad_bottom_right(depth, pad_to, ret_mask=False)
-    depth = torch.from_numpy(depth).float()  # (h, w)
-    return depth
+        depth_padded, _ = pad_bottom_right(depth_ori, pad_to, ret_mask=False)
+        depth_padded = torch.from_numpy(depth_padded).float()  # (h, w)
+    else:
+        depth_padded = None
+
+    depth_ori = torch.from_numpy(depth_ori).float()
+    depth_ori = depth_ori[None][None]  # (1, 1, h, w)
+    gt_depth_map = interpolate(depth_ori, depthmap_size, mode='nearest')
+    gt_depth_map = gt_depth_map.squeeze()  # (h, w)
+    h, w = depthmap_size
+
+    gt_depth_map = gt_depth_map.numpy()
+    gt_depth_map_padded, _ = pad_bottom_right(gt_depth_map, max(h, w), ret_mask=False)  # (80, 80)
+    gt_depth_map_padded = torch.from_numpy(gt_depth_map_padded).float()
+    
+    return depth_padded, gt_depth_map_padded  # for coarse loss and depth loss gt  
 
 
 # --- ScanNet ---
@@ -170,7 +188,34 @@ def read_scannet(path, resize=(640, 480), augment_fn=None):
     image_grey = imread_gray(path, augment_fn)
     image_raw = cv2.imread(path, cv2.IMREAD_COLOR)
     image_color = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
+    image_grey = cv2.resize(image_grey, resize)
+    image_color = cv2.resize(image_color, resize)
 
+    # (h, w) -> (1, h, w) and normalized
+    image_grey = torch.from_numpy(image_grey).float()[None] / 255
+    
+    return image_grey, image_color
+
+def read_scannet_rotated(path, resize=(640, 480), augment_fn=None):
+    """
+    Args:
+        resize (tuple): align image to depthmap, in (w, h).
+        augment_fn (callable, optional): augments images with pre-defined visual effects
+    Returns:
+        image (torch.tensor): (1, h, w)
+        mask (torch.tensor): (h, w)
+        scale (torch.tensor): [w/w_new, h/h_new]        
+    """
+    # read and resize image
+    image_grey = imread_gray(path, augment_fn)
+    image_raw = cv2.imread(path, cv2.IMREAD_COLOR)
+    image_color = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB) / 255.0  # [3, H, W]
+    
+    # 顺时针旋转45度
+    rows, cols = image_grey.shape[:2]
+    M = cv2.getRotationMatrix2D((cols/2, rows/2), 45, 1)  
+    image_grey = cv2.warpAffine(image_grey, M, (cols, rows))
+    image_color = cv2.warpAffine(image_color, M, (cols, rows))
     image_grey = cv2.resize(image_grey, resize)
     image_color = cv2.resize(image_color, resize)
 
@@ -187,6 +232,23 @@ def read_scannet_depth(path):
         depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     depth = depth / 1000
     depth = torch.from_numpy(depth).float()  # (h, w)
+
+    return depth
+
+def read_scannet_depth_rotated(path, resize=(640, 480)):
+    if str(path).startswith('s3://'):
+        depth = load_array_from_s3(str(path), SCANNET_CLIENT, cv2.IMREAD_UNCHANGED)
+    else:
+        depth = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+
+        # 顺时针旋转45度
+        rows, cols = depth.shape[:2]
+        M = cv2.getRotationMatrix2D((cols/2, rows/2), 45, 1)  
+        depth = cv2.warpAffine(depth, M, (cols, rows))
+        depth = cv2.resize(depth, resize)
+        depth = depth / 1000
+        depth = torch.from_numpy(depth).float()  # (h, w)
+
     return depth
 
 

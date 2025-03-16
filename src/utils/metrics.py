@@ -5,7 +5,9 @@ from collections import OrderedDict
 from loguru import logger
 from kornia.geometry.epipolar import numeric
 from kornia.geometry.conversions import convert_points_to_homogeneous
-
+from skimage.metrics import structural_similarity as ssim
+from torch.nn.functional import interpolate
+from einops.einops import rearrange
 
 # --- METRICS ---
 
@@ -133,8 +135,136 @@ def compute_pose_errors(data, config):
             data['t_errs'].append(t_err)
             data['inliers'].append(inliers)
 
+# --- DEPTH METRICS ---
+def compute_mae(pred_depth, true_depth, bg_mask):
+    # 创建前景掩码
+    fg_mask = ~bg_mask
 
-# --- METRIC AGGREGATION ---
+    # 提取前景深度值
+    fg_pred_depth = pred_depth[fg_mask]
+    fg_true_depth = true_depth[fg_mask]
+
+    # 计算前景深度值的平均绝对误差
+    mae = np.mean(np.abs(fg_pred_depth - fg_true_depth))
+
+    return mae
+
+def compute_rel_error(pred_depth, true_depth, bg_mask):
+   # 创建前景掩码
+    fg_mask = ~bg_mask
+
+    # 提取前景深度值
+    fg_pred_depth = pred_depth[fg_mask]
+    fg_true_depth = true_depth[fg_mask]
+
+    # 计算前景深度值的相对误差
+    rel_error = np.mean(np.abs(fg_pred_depth - fg_true_depth) / (fg_true_depth))
+
+    return rel_error
+
+def compute_ssim(pred_depth, true_depth, bg_mask):
+   # 创建前景掩码
+    fg_mask = ~bg_mask
+
+    # 提取前景深度值
+    fg_pred_depth = pred_depth[0][fg_mask[0]]  # 注意：ssim需要单通道图像
+    fg_true_depth = true_depth[0][fg_mask[0]]
+
+    # 计算前景深度值的结构相似性指数
+    ssim_value = ssim(fg_pred_depth, fg_true_depth, data_range=fg_pred_depth.max() - fg_pred_depth.min(), win_size=3)
+    return ssim_value
+
+def compute_vertex_accuracy(pred_depth, true_depth, bg_mask, threshold=1.25):
+     # 创建前景掩码
+    fg_mask = ~bg_mask
+
+    # 提取前景深度值
+    fg_pred_depth = pred_depth[fg_mask]
+    fg_true_depth = true_depth[fg_mask]
+
+    # 计算前景深度值的相对误差
+    rel_error = np.maximum(fg_pred_depth / fg_true_depth, fg_true_depth / fg_pred_depth)
+
+    # 计算低于阈值的比例
+    accuracy = np.mean(rel_error < threshold)
+
+    return accuracy
+
+def compute_depth_errors(data):
+    data.update({
+        'mse': [],
+        'mae': [],
+        'rmse': [],
+        'rel_error': [],
+        'ssim': [],
+        'vertex_acc': []
+    })
+
+    true_depth0 = interpolate(data['depth0'].unsqueeze(1), data['hw0_c'], mode='nearest')
+    true_depth1 = interpolate(data['depth1'].unsqueeze(1), data['hw1_c'], mode='nearest')
+    true_depth0 = rearrange(true_depth0, 'n c h w -> (n c) h w').cpu().numpy()
+    true_depth1 = rearrange(true_depth1, 'n c h w -> (n c) h w').cpu().numpy()
+
+    # 无效值
+    bg_mask0 = true_depth0 < 1e-4
+    bg_mask1 = true_depth1 < 1e-4
+    true_depth0[bg_mask0] = 15.0
+    true_depth1[bg_mask1] = 15.0
+
+    pred_depth0 = data['depth_map0'].cpu().numpy()
+    pred_depth1 = data['depth_map1'].cpu().numpy()
+
+    # # 转化为相对深度
+    # true_depth0 =  (true_depth0 - np.min(true_depth0)) / (np.max(true_depth0) - np.min(true_depth0))
+    # true_depth1 =  (true_depth1 - np.min(true_depth1)) / (np.max(true_depth1) - np.min(true_depth1))
+    # pred_depth0 =  (pred_depth0 - np.min(pred_depth0)) / (np.max(pred_depth0) - np.min(pred_depth0))
+    # pred_depth1 =  (pred_depth1 - np.min(pred_depth1)) / (np.max(pred_depth1) - np.min(pred_depth1))
+
+    # 计算指标
+    for bs in range(true_depth0.shape[0]):
+        mae = (compute_mae(pred_depth0, true_depth0, bg_mask0) + compute_mae(pred_depth1, true_depth1, bg_mask1)) / 2
+        rel_error = (compute_rel_error(pred_depth0, true_depth0, bg_mask0) + compute_rel_error(pred_depth1, true_depth1, bg_mask1)) / 2
+        ssim = (compute_ssim(pred_depth0, true_depth0, bg_mask0) + compute_ssim(pred_depth1, true_depth1, bg_mask1)) / 2
+        vertex_acc = (compute_vertex_accuracy(pred_depth0, true_depth0, bg_mask=bg_mask0) + compute_vertex_accuracy(pred_depth1, true_depth1, bg_mask=bg_mask1)) / 2
+
+        data['mae'].append(mae)
+        data['rel_error'].append(rel_error)
+        data['ssim'].append(ssim)
+        data['vertex_acc'].append(vertex_acc)
+
+def compute_depth_errors_DA(data):
+    data.update({
+        'mae_DA': [],
+        'rel_error_DA': [],
+        'ssim_DA': [],
+        'vertex_acc_DA': []
+    })
+
+    # 无效值
+    bg_mask0 = true_depth0 < 1e-4
+    bg_mask1 = true_depth1 < 1e-4
+    true_depth0 = data['gt_depth_map0'].cpu().numpy()
+    true_depth1 = data['gt_depth_map1'].cpu().numpy()
+    pred_depth0 = data['rel_depth0'].cpu().numpy()
+    pred_depth1 = data['rel_depth1'].cpu().numpy()
+
+    # 转化为相对深度
+    true_depth0 =  (true_depth0 - np.min(true_depth0)) / (np.max(true_depth0) - np.min(true_depth0))
+    true_depth1 =  (true_depth1 - np.min(true_depth1)) / (np.max(true_depth1) - np.min(true_depth1))
+    pred_depth0 = pred_depth0 / 255.0
+    pred_depth1 = pred_depth1 / 255.0
+
+    # 计算指标
+    for bs in range(true_depth0.shape[0]):
+        mae = (compute_mae(pred_depth0, true_depth0, bg_mask0) + compute_mae(pred_depth1, true_depth1, bg_mask1)) / 2
+        rel_error = (compute_rel_error(pred_depth0, true_depth0, bg_mask0) + compute_rel_error(pred_depth1, true_depth1, bg_mask1)) / 2
+        ssim = (compute_ssim(pred_depth0, true_depth0, bg_mask0) + compute_ssim(pred_depth1, true_depth1, bg_mask1)) / 2
+        vertex_acc = (compute_vertex_accuracy(pred_depth0, true_depth0, bg_mask=bg_mask0) + compute_vertex_accuracy(pred_depth1, true_depth1, bg_mask=bg_mask1)) / 2
+
+        data['mae_DA'].append(mae)
+        data['rel_error_DA'].append(rel_error)
+        data['ssim_DA'].append(ssim)
+        data['vertex_acc_DA'].append(vertex_acc)
 
 def error_auc(errors, thresholds):
     """
@@ -169,12 +299,21 @@ def epidist_prec(errors, thresholds, ret_dict=False):
     else:
         return precs
 
+def depth_estimate_errors(metrics, metric_names, unq_ids):
+    depth_metrics = {}
+    for n in metric_names:
+        metric = np.array(metrics[n], dtype=object)[unq_ids]
+        depth_metrics[n] = np.mean(metric)
+    
+    return depth_metrics
+    
 
 def aggregate_metrics(metrics, epi_err_thr=5e-4):
     """ Aggregate metrics for the whole dataset:
     (This method should be called once per dataset)
     1. AUC of the pose error (angular) at the threshold [5, 10, 20]
     2. Mean matching precision at the threshold 5e-4(ScanNet), 1e-4(MegaDepth)
+    3. Depth estimation errors
     """
     # filter duplicates
     unq_ids = OrderedDict((iden, id) for id, iden in enumerate(metrics['identifiers']))
@@ -190,4 +329,8 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4):
     dist_thresholds = [epi_err_thr]
     precs = epidist_prec(np.array(metrics['epi_errs'], dtype=object)[unq_ids], dist_thresholds, True)  # (prec@err_thr)
 
-    return {**aucs, **precs}
+    # depth estimate error
+    depth_errors = depth_estimate_errors(metrics, ['mae','rel_error','ssim','vertex_acc'], unq_ids)
+    # depth_errors_DA = depth_estimate_errors(metrics, [''mae_DA','rel_error_DA','ssim_DA','vertex_acc_DA'], unq_ids)
+
+    return {**aucs, **precs, **depth_errors}

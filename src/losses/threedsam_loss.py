@@ -29,10 +29,19 @@ class ThreeDSAMLoss(nn.Module):
     def compute_depth_loss(self, depth_logits0, depth_logits1, depth_map0, depth_map1, data):
         assert 'depth0' in data, 'We need to supervise depth information during training.'
         # downsampling to coarse scale (where depth info stays at)
+        
+        # gt for Scannet
         gt_depth_map0 = interpolate(data['depth0'].unsqueeze(1), data['hw0_c'], mode='nearest')
         gt_depth_map1 = interpolate(data['depth1'].unsqueeze(1), data['hw1_c'], mode='nearest')
         gt_depth_map0 = rearrange(gt_depth_map0, 'n c h w -> (n c) h w')
         gt_depth_map1 = rearrange(gt_depth_map1, 'n c h w -> (n c) h w')
+
+        # # gt depth for Megadepth
+        # gt_depth_map0 = data['gt_depth_map0']
+        # gt_depth_map1 = data['gt_depth_map1']
+
+        if gt_depth_map0.max() > self.depth_max or gt_depth_map1.max() > self.depth_max:
+            print(f"!!! Encountered max gt depth value {gt_depth_map0.max()} or {gt_depth_map1.max()} bigger than {self.depth_max} !!!")
         
         # generate mask for background
         bg_mask0 = gt_depth_map0 < 1e-5
@@ -46,6 +55,12 @@ class ThreeDSAMLoss(nn.Module):
         bin_size = (self.depth_max - self.depth_min) / (self.num_bins - 1)
         indices0 = (gt_depth_map0 - self.depth_min) / bin_size
         indices1 = (gt_depth_map1 - self.depth_min) / bin_size
+
+        ind_mask0 = indices0 >= self.num_bins
+        ind_mask1 = indices1 >= self.num_bins
+        indices0[ind_mask0] = self.num_bins - 1
+        indices1[ind_mask1] = self.num_bins - 1
+
         indices0 = indices0.type(torch.int64) # [N H W]
         indices1 = indices1.type(torch.int64)
 
@@ -55,7 +70,6 @@ class ThreeDSAMLoss(nn.Module):
         
         shape0 = indices0.shape
         target_one_hot0 = torch.zeros((shape0[0], depth_logits0.shape[1]) + shape0[1:], device=depth_logits0.device, dtype=depth_logits0.dtype)
-        print(indices0.max())
         target_one_hot0 = target_one_hot0.scatter_(1, indices0.unsqueeze(1), 1.0) + 1e-6
         
         weight0 = torch.pow(-input_soft0 + 1.0, self.loss_config['focal_gamma'])

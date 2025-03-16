@@ -78,9 +78,7 @@ class ThreeDSAM(nn.Module):
 
         # 2. LoFTR module 
 
-        # feat_c0, feat_c1, T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
-        # feat_c0 = rearrange(feat_c0, 'n (h w) c -> n c h w', h=data['hw0_c'][0], w=data['hw0_c'][1])
-        # feat_c1 = rearrange(feat_c1, 'n (h w) c -> n c h w', h=data['hw1_c'][0], w=data['hw1_c'][1])
+        # _, _, T_0to1 = self.get_pose(data, feat_c0, feat_c1, feat_f0, feat_f1)
         
         # #  enable if test performance with gt pose provided 
         # if not self.training:
@@ -91,16 +89,30 @@ class ThreeDSAM(nn.Module):
         depth_embed0, depth_embed1, \
         depth_prob0, depth_prob1 = self.depth_net(feat_c0, feat_c1, data)
 
+        data.update({
+            "depth_map0": depth_map_pred0,
+            "depth_map1": depth_map_pred1
+        })
+
         # 4. 3DPPE
         pos_embed0 = self.pos_encoding3d(depth_map_pred0, data['hw0_i'], data['K0'], T_0to1)  # (N, L, 256)
         pos_embed1 = self.pos_encoding3d(depth_map_pred1, data['hw1_i'], data['K1'])
+
+        data.update({
+            "pos_embed0": rearrange(pos_embed0, 'n (h w) c -> n h w c', h=data['hw0_c'][0], w=data['hw0_c'][1]),
+            "pos_embed1": rearrange(pos_embed1, 'n (h w) c -> n h w c', h=data['hw0_c'][0], w=data['hw0_c'][1])
+        })
 
         # use no mask
         mask_c0, mask_c1 = None, None
 
         # 5. depth aware atten
+        # feat_c0 = rearrange(self.pos_encoding2d(feat_c0), 'n c h w -> n (h w) c')
+        # feat_c1 = rearrange(self.pos_encoding2d(feat_c1), 'n c h w -> n (h w) c')
         feat_c0 = rearrange(feat_c0, 'n c h w -> n (h w) c')
         feat_c1 = rearrange(feat_c1, 'n c h w -> n (h w) c')
+        # depth_embed0 = rearrange(self.pos_encoding2d(depth_embed0), 'n c h w -> n (h w) c')
+        # depth_embed1 = rearrange(self.pos_encoding2d(depth_embed1), 'n c h w -> n (h w) c')
         depth_embed0 = rearrange(depth_embed0, 'n c h w -> n (h w) c')
         depth_embed1 = rearrange(depth_embed1, 'n c h w -> n (h w) c')
         feat_c0, feat_c1 = self.depth_aware_coarse(feat_c0, feat_c1, pos_embed0, pos_embed1, 
